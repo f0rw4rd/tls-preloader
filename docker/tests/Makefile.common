@@ -1,0 +1,21 @@
+# Common Makefile rules for all test directories
+CC ?= cc
+CFLAGS ?= -O2 -Wall -I..
+LDFLAGS ?= -lpthread -ldl
+
+# Default rule
+all: $(TEST_PROGS)
+
+# Common test runner object
+../test_runner.o: ../test_runner.c ../test_runner.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+# Pattern rule for test programs
+test_%: test_%.c ../test_runner.o
+	$(CC) $(CFLAGS) -o $@ $< ../test_runner.o $(LDFLAGS) $(EXTRA_LDFLAGS)
+
+# Clean rule
+clean:
+	rm -f $(TEST_PROGS) *.o
+
+.PHONY: all clean

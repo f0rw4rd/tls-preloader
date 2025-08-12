@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  test-alpine:
+    build:
+      context: ..
+      dockerfile: docker/alpine/Dockerfile
+    container_name: tls-test-alpine
+    networks:
+      - test-network
+
+  test-ubuntu:
+    build:
+      context: ..
+      dockerfile: docker/ubuntu/Dockerfile
+    container_name: tls-test-ubuntu
+    networks:
+      - test-network
+
+  test-alpine-debug:
+    build:
+      context: ..
+      dockerfile: docker/alpine/Dockerfile
+    container_name: tls-test-alpine-debug
+    command: ["./tests/run_tests.sh", "--debug"]
+    networks:
+      - test-network
+
+  test-ubuntu-debug:
+    build:
+      context: ..
+      dockerfile: docker/ubuntu/Dockerfile
+    container_name: tls-test-ubuntu-debug
+    command: ["./tests/run_tests.sh", "--debug"]
+    networks:
+      - test-network
+
+networks:
+  test-network:
+    driver: bridge
