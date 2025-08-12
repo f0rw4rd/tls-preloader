@@ -139,9 +139,11 @@ static void debug_log(const char *msg) {
     }
     if (g_debug) {
         const char prefix[] = "[TLS_NOVERIFY] ";
-        write(2, prefix, sizeof(prefix) - 1);
-        write(2, msg, strlen(msg));
-        write(2, "\n", 1);
+        ssize_t ret;
+        ret = write(2, prefix, sizeof(prefix) - 1);
+        ret = write(2, msg, strlen(msg));
+        ret = write(2, "\n", 1);
+        (void)ret; /* Silence unused variable warning */
     }
 }
 
@@ -235,10 +237,6 @@ static int openssl_verify_cb(void *store_ctx, void *arg) {
     return 1;
 }
 
-static int openssl_verify_cb_old(int ok, void *ctx) {
-    debug_log("OpenSSL verify callback (old): bypass");
-    return 1;
-}
 
 /* BoringSSL callback */
 static int boringssl_custom_verify(void *ssl, unsigned char *out_alert) {

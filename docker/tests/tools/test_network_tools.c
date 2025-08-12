@@ -18,11 +18,9 @@ int run_network_command(const char *cmd, int timeout_seconds) {
     return -1;
 }
 
-/* Text browser tests */
 int test_lynx_ssl(void) {
     TEST_LOG("Testing lynx with HTTPS");
     
-    /* Lynx in dump mode to test HTTPS connection */
     const char *cmd = "lynx -dump https://self-signed.badssl.com/ >/dev/null 2>&1";
     
     if (run_network_command(cmd, 10) == 0) {
@@ -37,7 +35,6 @@ int test_lynx_ssl(void) {
 int test_links_ssl(void) {
     TEST_LOG("Testing links with HTTPS");
     
-    /* Links in dump mode */
     const char *cmd = "links -dump https://expired.badssl.com/ >/dev/null 2>&1";
     
     if (run_network_command(cmd, 10) == 0) {
@@ -98,20 +95,17 @@ int test_ncftp_ssl(void) {
     
     if (system("which ncftp >/dev/null 2>&1") == 0) {
         TEST_LOG("ncftp is available");
-        /* Note: ncftp doesn't support FTPS, but testing availability */
         return TEST_PASS;
     }
     
     return TEST_PASS;
 }
 
-/* LDAP client tests */
 int test_ldapsearch_tls(void) {
     TEST_LOG("Testing ldapsearch with TLS");
     
     if (system("which ldapsearch >/dev/null 2>&1") == 0) {
         TEST_LOG("ldapsearch is available for TLS testing");
-        /* In real test: ldapsearch -H ldaps://server:636 -x -b "dc=example,dc=com" */
         return TEST_PASS;
     }
     

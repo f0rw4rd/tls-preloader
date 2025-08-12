@@ -2,9 +2,8 @@
 #include "../test_framework.h"
 #include <curl/curl.h>
 
-/* Helper function for write callback */
 size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
-    return size * nmemb; /* Just discard the data */
+    return size * nmemb;
 }
 
 int test_proxy_ssl_verifypeer(void) {
@@ -17,24 +16,18 @@ int test_proxy_ssl_verifypeer(void) {
         return TEST_FAIL;
     }
     
-    /* Set proxy */
     curl_easy_setopt(curl, CURLOPT_PROXY, "https://proxy.example.com:8443");
     
-    /* Try to enable proxy SSL verification - should be bypassed */
     curl_easy_setopt(curl, CURLOPT_PROXY_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_PROXY_SSL_VERIFYHOST, 2L);
     
-    /* Set a test URL */
     curl_easy_setopt(curl, CURLOPT_URL, "https://httpbin.org/get");
     
-    /* Suppress output */
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
     
-    /* This would normally fail with bad proxy cert, but should succeed */
     res = curl_easy_perform(curl);
     
-    /* Check if proxy SSL verify result is bypassed */
     long verify_result = -1;
     curl_easy_getinfo(curl, CURLINFO_PROXY_SSL_VERIFYRESULT, &verify_result);
     
@@ -45,7 +38,6 @@ int test_proxy_ssl_verifypeer(void) {
         return TEST_FAIL;
     }
     
-    /* Note: actual proxy connection might fail, but verification should be bypassed */
     TEST_LOG("Proxy SSL verification bypassed successfully");
     return TEST_PASS;
 }

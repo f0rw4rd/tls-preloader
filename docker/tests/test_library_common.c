@@ -15,6 +15,50 @@ int test_library_function_exists(const char *func_name) {
 
 /* Test if library function returns expected value */
 int test_library_function_returns(const char *func_name, int expected) {
+    /* Special handling for GnuTLS functions that need proper parameters */
+    if (strstr(func_name, "gnutls_certificate_verify_peers")) {
+        if (strcmp(func_name, "gnutls_certificate_verify_peers2") == 0) {
+            typedef int (*gnutls_verify2_func_t)(void *, unsigned int *);
+            gnutls_verify2_func_t func = (gnutls_verify2_func_t)dlsym_bypass(func_name);
+            
+            if (!func) {
+                TEST_LOG("%s not found", func_name);
+                return TEST_SKIP;
+            }
+            
+            unsigned int status = 0xFFFFFFFF;  /* Non-zero to test bypass */
+            int result = func(NULL, &status);
+            if (result == expected && status == 0) {
+                TEST_LOG("%s returned %d with status=0 (expected %d)", func_name, result, expected);
+                return TEST_PASS;
+            }
+            
+            TEST_ERROR("%s returned %d with status=%u (expected %d with status=0)", 
+                       func_name, result, status, expected);
+            return TEST_FAIL;
+        } else if (strcmp(func_name, "gnutls_certificate_verify_peers3") == 0) {
+            typedef int (*gnutls_verify3_func_t)(void *, const char *, unsigned int *);
+            gnutls_verify3_func_t func = (gnutls_verify3_func_t)dlsym_bypass(func_name);
+            
+            if (!func) {
+                TEST_LOG("%s not found", func_name);
+                return TEST_SKIP;
+            }
+            
+            unsigned int status = 0xFFFFFFFF;  /* Non-zero to test bypass */
+            int result = func(NULL, "test.example.com", &status);
+            if (result == expected && status == 0) {
+                TEST_LOG("%s returned %d with status=0 (expected %d)", func_name, result, expected);
+                return TEST_PASS;
+            }
+            
+            TEST_ERROR("%s returned %d with status=%u (expected %d with status=0)", 
+                       func_name, result, status, expected);
+            return TEST_FAIL;
+        }
+    }
+    
+    /* Default behavior for other functions */
     typedef int (*func_ptr_t)(void *);
     func_ptr_t func = (func_ptr_t)dlsym_bypass(func_name);
     
@@ -62,7 +106,6 @@ int test_library_version(const char *version_func, const char *min_version) {
     }
     
     TEST_LOG("Library version: %s", version);
-    /* TODO: Add version comparison logic if needed */
     return TEST_PASS;
 }
 
