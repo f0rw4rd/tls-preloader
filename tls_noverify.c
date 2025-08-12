@@ -238,6 +238,127 @@ static void *load_func(int id, const char *name) {
 /* Convenience macros */
 #define LOAD_FN(id, name) load_func(id, name)
 
+/* Function generator macros */
+/* Simple bypass that returns a constant */
+#define BYPASS_RETURN(name, ret_type, ret_val) \
+ret_type name(void *arg) { \
+    debug_log(#name ": bypass"); \
+    return ret_val; \
+}
+
+/* Bypass with two args returning constant */
+#define BYPASS_RETURN2(name, ret_type, arg2_type, ret_val) \
+ret_type name(void *arg1, arg2_type arg2) { \
+    debug_log(#name ": bypass"); \
+    return ret_val; \
+}
+
+/* Bypass with three args returning constant */
+#define BYPASS_RETURN3(name, ret_type, arg2_type, arg3_type, ret_val) \
+ret_type name(void *arg1, arg2_type arg2, arg3_type arg3) { \
+    debug_log(#name ": bypass"); \
+    return ret_val; \
+}
+
+/* Bypass with four args returning constant */
+#define BYPASS_RETURN4(name, ret_type, arg2_type, arg3_type, arg4_type, ret_val) \
+ret_type name(void *arg1, arg2_type arg2, arg3_type arg3, arg4_type arg4) { \
+    debug_log(#name ": bypass"); \
+    return ret_val; \
+}
+
+/* Bypass with five args returning constant */
+#define BYPASS_RETURN5(name, ret_type, arg2_type, arg3_type, arg4_type, arg5_type, ret_val) \
+ret_type name(void *arg1, arg2_type arg2, arg3_type arg3, arg4_type arg4, arg5_type arg5) { \
+    debug_log(#name ": bypass"); \
+    return ret_val; \
+}
+
+/* Bypass with seven args returning constant (for NSS functions) */
+#define BYPASS_RETURN7(name, ret_type, arg2_type, arg3_type, arg4_type, arg5_type, arg6_type, arg7_type, ret_val) \
+ret_type name(void *arg1, arg2_type arg2, arg3_type arg3, arg4_type arg4, \
+              arg5_type arg5, arg6_type arg6, arg7_type arg7) { \
+    debug_log(#name ": bypass"); \
+    return ret_val; \
+}
+
+/* Bypass with eight args returning constant with special handling */
+#define BYPASS_RETURN8_SPECIAL(name, ret_type, arg2_type, arg3_type, arg4_type, arg5_type, arg6_type, arg7_type, arg8_type) \
+ret_type name(void *arg1, arg2_type arg2, arg3_type arg3, arg4_type arg4, \
+              arg5_type arg5, arg6_type arg6, arg7_type arg7, arg8_type arg8) { \
+    debug_log(#name ": bypass"); \
+    if (arg8) *arg8 = arg4; \
+    return 0; \
+}
+
+/* Void bypass with four args */
+#define BYPASS_VOID4(name, arg2_type, arg3_type, arg4_type) \
+void name(void *arg1, arg2_type arg2, arg3_type arg3, arg4_type arg4) { \
+    debug_log(#name ": bypass"); \
+}
+
+/* Simple void bypass */
+#define BYPASS_VOID(name) \
+void name(void *arg) { \
+    debug_log(#name ": bypass"); \
+}
+
+/* Void bypass with two args */
+#define BYPASS_VOID2(name, arg2_type) \
+void name(void *arg1, arg2_type arg2) { \
+    debug_log(#name ": bypass"); \
+}
+
+/* Void bypass with three args */
+#define BYPASS_VOID3(name, arg2_type, arg3_type) \
+void name(void *arg1, arg2_type arg2, arg3_type arg3) { \
+    debug_log(#name ": bypass"); \
+}
+
+/* Bypass that loads and calls real function with modified args */
+#define BYPASS_LOAD_CALL_VOID2(name, fn_id, arg2_type, new_arg2) \
+void name(void *arg1, arg2_type arg2) { \
+    debug_log(#name ": bypass"); \
+    void (*real)(void*, arg2_type) = (void (*)(void*, arg2_type)) \
+        LOAD_FN(fn_id, #name); \
+    if (real) real(arg1, new_arg2); \
+}
+
+/* Bypass that loads and calls real function with modified args (3 args) */
+#define BYPASS_LOAD_CALL_VOID3(name, fn_id, arg2_type, arg3_type, new_arg2, new_arg3) \
+void name(void *arg1, arg2_type arg2, arg3_type arg3) { \
+    debug_log(#name ": bypass"); \
+    void (*real)(void*, arg2_type, arg3_type) = (void (*)(void*, arg2_type, arg3_type)) \
+        LOAD_FN(fn_id, #name); \
+    if (real) real(arg1, new_arg2, new_arg3); \
+}
+
+/* Special bypass for functions that return 0 and set status pointer (2 args) */
+#define BYPASS_RETURN_STATUS2(name, arg2_type) \
+int name(void *arg1, arg2_type arg2) { \
+    debug_log(#name ": bypass"); \
+    if (arg2) *arg2 = 0; \
+    return 0; \
+}
+
+/* Special bypass for functions that return 0 and set status pointer (3 args) */
+#define BYPASS_RETURN_STATUS3(name, arg2_type, arg3_type) \
+int name(void *arg1, arg2_type arg2, arg3_type arg3) { \
+    debug_log(#name ": bypass"); \
+    if (arg3) *arg3 = 0; \
+    return 0; \
+}
+
+/* Bypass that loads and calls real function with callback replacement */
+#define BYPASS_LOAD_CALL_CB(name, fn_id, callback) \
+int name(void *arg1, void *arg2, void *arg3) { \
+    debug_log(#name ": bypass"); \
+    int (*real)(void*, void*, void*) = (int (*)(void*, void*, void*)) \
+        LOAD_FN(fn_id, #name); \
+    if (real) return real(arg1, callback, arg3); \
+    return 0; \
+}
+
 /* =========================== Callback Functions =========================== */
 
 /* OpenSSL callbacks */
@@ -285,19 +406,9 @@ static int wolfssl_verify_cb(int preverify_ok, void *ctx) {
 
 /* =========================== OpenSSL/BoringSSL/LibreSSL Hooks =========================== */
 
-void SSL_CTX_set_verify(void *ctx, int mode, void *cb) {
-    debug_log("SSL_CTX_set_verify: bypass");
-    void (*real)(void*, int, void*) = (void (*)(void*, int, void*))
-        LOAD_FN(FN_SSL_CTX_SET_VERIFY, "SSL_CTX_set_verify");
-    if (real) real(ctx, 0, NULL);
-}
+BYPASS_LOAD_CALL_VOID3(SSL_CTX_set_verify, FN_SSL_CTX_SET_VERIFY, int, void*, 0, NULL)
 
-void SSL_set_verify(void *ssl, int mode, void *cb) {
-    debug_log("SSL_set_verify: bypass");
-    void (*real)(void*, int, void*) = (void (*)(void*, int, void*))
-        LOAD_FN(FN_SSL_SET_VERIFY, "SSL_set_verify");
-    if (real) real(ssl, 0, NULL);
-}
+BYPASS_LOAD_CALL_VOID3(SSL_set_verify, FN_SSL_SET_VERIFY, int, void*, 0, NULL)
 
 void SSL_CTX_set_cert_verify_callback(void *ctx, void *cb, void *arg) {
     debug_log("SSL_CTX_set_cert_verify_callback: bypass");
@@ -313,77 +424,33 @@ void SSL_CTX_set_custom_verify(void *ctx, int mode, void *cb) {
     if (real) real(ctx, mode, boringssl_custom_verify);
 }
 
-int X509_verify_cert(void *ctx) {
-    debug_log("X509_verify_cert: bypass");
-    return 1;
-}
+BYPASS_RETURN(X509_verify_cert, int, 1)
 
-long SSL_get_verify_result(const void *ssl) {
-    debug_log("SSL_get_verify_result: bypass");
-    return 0L; /* X509_V_OK */
-}
+BYPASS_RETURN(SSL_get_verify_result, long, 0L) /* X509_V_OK */
 
-void SSL_set_verify_result(void *ssl, long result) {
-    debug_log("SSL_set_verify_result: bypass");
-    void (*real)(void*, long) = (void (*)(void*, long))
-        LOAD_FN(FN_SSL_SET_VERIFY_RESULT, "SSL_set_verify_result");
-    if (real) real(ssl, 0L);
-}
+BYPASS_LOAD_CALL_VOID2(SSL_set_verify_result, FN_SSL_SET_VERIFY_RESULT, long, 0L)
 
-void SSL_set_verify_mode(void *ssl, int mode) {
-    debug_log("SSL_set_verify_mode: bypass");
-    void (*real)(void*, int) = (void (*)(void*, int))
-        LOAD_FN(FN_SSL_SET_VERIFY_MODE, "SSL_set_verify_mode");
-    if (real) real(ssl, 0);
-}
+BYPASS_LOAD_CALL_VOID2(SSL_set_verify_mode, FN_SSL_SET_VERIFY_MODE, int, 0)
 
-void SSL_set_verify_depth(void *ssl, int depth) {
-    debug_log("SSL_set_verify_depth: bypass");
-}
+BYPASS_VOID2(SSL_set_verify_depth, int)
 
-void SSL_CTX_set_verify_depth(void *ctx, int depth) {
-    debug_log("SSL_CTX_set_verify_depth: bypass");
-}
+BYPASS_VOID2(SSL_CTX_set_verify_depth, int)
 
-int SSL_set1_host(void *ssl, const char *hostname) {
-    debug_log("SSL_set1_host: bypass");
-    return 1;
-}
+BYPASS_RETURN2(SSL_set1_host, int, const char*, 1)
 
-int SSL_add1_host(void *ssl, const char *hostname) {
-    debug_log("SSL_add1_host: bypass");
-    return 1;
-}
+BYPASS_RETURN2(SSL_add1_host, int, const char*, 1)
 
-void SSL_set_hostflags(void *ssl, unsigned int flags) {
-    debug_log("SSL_set_hostflags: bypass");
-}
+BYPASS_VOID2(SSL_set_hostflags, unsigned int)
 
-int SSL_CTX_load_verify_locations(void *ctx, const char *file, const char *path) {
-    debug_log("SSL_CTX_load_verify_locations: bypass");
-    return 1;
-}
+BYPASS_RETURN3(SSL_CTX_load_verify_locations, int, const char*, const char*, 1)
 
-int SSL_CTX_set_default_verify_paths(void *ctx) {
-    debug_log("SSL_CTX_set_default_verify_paths: bypass");
-    return 1;
-}
+BYPASS_RETURN(SSL_CTX_set_default_verify_paths, int, 1)
 
-void X509_STORE_CTX_set_error(void *ctx, int err) {
-    debug_log("X509_STORE_CTX_set_error: bypass");
-    void (*real)(void*, int) = (void (*)(void*, int))
-        LOAD_FN(FN_X509_STORE_CTX_SET_ERROR, "X509_STORE_CTX_set_error");
-    if (real) real(ctx, 0);
-}
+BYPASS_LOAD_CALL_VOID2(X509_STORE_CTX_set_error, FN_X509_STORE_CTX_SET_ERROR, int, 0)
 
-void X509_STORE_CTX_set_current_cert(void *ctx, void *x) {
-    debug_log("X509_STORE_CTX_set_current_cert: bypass");
-}
+BYPASS_VOID2(X509_STORE_CTX_set_current_cert, void*)
 
-int X509_STORE_set_flags(void *ctx, unsigned long flags) {
-    debug_log("X509_STORE_set_flags: bypass");
-    return 1;
-}
+BYPASS_RETURN2(X509_STORE_set_flags, int, unsigned long, 1)
 
 int X509_check_host(void *x, const char *chk, size_t chklen, unsigned int flags, char **peername) {
     debug_log("X509_check_host: bypass");
@@ -391,35 +458,17 @@ int X509_check_host(void *x, const char *chk, size_t chklen, unsigned int flags,
     return 1;
 }
 
-int X509_check_email(void *x, const char *addr, size_t addrlen, unsigned int flags) {
-    debug_log("X509_check_email: bypass");
-    return 1;
-}
+BYPASS_RETURN4(X509_check_email, int, const char*, size_t, unsigned int, 1)
 
-int X509_check_ip(void *x, const unsigned char *addr, size_t addrlen, unsigned int flags) {
-    debug_log("X509_check_ip: bypass");
-    return 1;
-}
+BYPASS_RETURN4(X509_check_ip, int, const unsigned char*, size_t, unsigned int, 1)
 
-int X509_check_ip_asc(void *x, const char *ipasc, unsigned int flags) {
-    debug_log("X509_check_ip_asc: bypass");
-    return 1;
-}
+BYPASS_RETURN3(X509_check_ip_asc, int, const char*, unsigned int, 1)
 
-int X509_VERIFY_PARAM_set1_host(void *param, const char *name, size_t namelen) {
-    debug_log("X509_VERIFY_PARAM_set1_host: bypass");
-    return 1;
-}
+BYPASS_RETURN3(X509_VERIFY_PARAM_set1_host, int, const char*, size_t, 1)
 
-int X509_VERIFY_PARAM_set_hostflags(void *param, unsigned int flags) {
-    debug_log("X509_VERIFY_PARAM_set_hostflags: bypass");
-    return 1;
-}
+BYPASS_RETURN2(X509_VERIFY_PARAM_set_hostflags, int, unsigned int, 1)
 
-int SSL_get_verify_mode(const void *ssl) {
-    debug_log("SSL_get_verify_mode: bypass");
-    return 0; /* SSL_VERIFY_NONE */
-}
+BYPASS_RETURN(SSL_get_verify_mode, int, 0) /* SSL_VERIFY_NONE */
 
 /* =========================== GnuTLS Hooks =========================== */
 
@@ -430,39 +479,19 @@ void gnutls_certificate_set_verify_function(void *cred, void *func) {
     if (real) real(cred, (void*)gnutls_verify_cb);
 }
 
-int gnutls_certificate_verify_peers2(void *session, unsigned int *status) {
-    debug_log("gnutls_certificate_verify_peers2: bypass");
-    if (status) *status = 0;
-    return 0;
-}
+BYPASS_RETURN_STATUS2(gnutls_certificate_verify_peers2, unsigned int*)
 
-int gnutls_certificate_verify_peers3(void *session, const char *hostname, unsigned int *status) {
-    debug_log("gnutls_certificate_verify_peers3: bypass");
-    if (status) *status = 0;
-    return 0;
-}
+BYPASS_RETURN_STATUS3(gnutls_certificate_verify_peers3, const char*, unsigned int*)
 
-void gnutls_session_set_verify_cert(void *session, const char *hostname, unsigned flags) {
-    debug_log("gnutls_session_set_verify_cert: bypass");
-}
+BYPASS_VOID3(gnutls_session_set_verify_cert, const char*, unsigned)
 
-void gnutls_session_set_verify_cert2(void *session, void *data, unsigned elements, unsigned flags) {
-    debug_log("gnutls_session_set_verify_cert2: bypass");
-}
+BYPASS_VOID4(gnutls_session_set_verify_cert2, void*, unsigned, unsigned)
 
-int gnutls_certificate_set_x509_trust_file(void *cred, const char *cafile, int type) {
-    debug_log("gnutls_certificate_set_x509_trust_file: bypass");
-    return 0;
-}
+BYPASS_RETURN3(gnutls_certificate_set_x509_trust_file, int, const char*, int, 0)
 
-int gnutls_certificate_set_x509_trust_mem(void *cred, const void *ca, int type) {
-    debug_log("gnutls_certificate_set_x509_trust_mem: bypass");
-    return 0;
-}
+BYPASS_RETURN3(gnutls_certificate_set_x509_trust_mem, int, const void*, int, 0)
 
-void gnutls_certificate_set_verify_limits(void *res, unsigned int max_bits, unsigned int max_depth) {
-    debug_log("gnutls_certificate_set_verify_limits: bypass");
-}
+BYPASS_VOID3(gnutls_certificate_set_verify_limits, unsigned int, unsigned int)
 
 time_t gnutls_x509_crt_get_expiration_time(void *cert) {
     time_t (*real)(void*) = (time_t (*)(void*))
@@ -496,53 +525,21 @@ time_t gnutls_x509_crt_get_activation_time(void *cert) {
 
 /* =========================== NSS Hooks =========================== */
 
-int SSL_AuthCertificateHook(void *fd, void *f, void *arg) {
-    debug_log("SSL_AuthCertificateHook: bypass");
-    int (*real)(void*, void*, void*) = (int (*)(void*, void*, void*))
-        LOAD_FN(FN_SSL_AUTH_CERT_HOOK, "SSL_AuthCertificateHook");
-    if (real) return real(fd, nss_auth_cb, arg);
-    return 0;
-}
+BYPASS_LOAD_CALL_CB(SSL_AuthCertificateHook, FN_SSL_AUTH_CERT_HOOK, nss_auth_cb)
 
-int SSL_BadCertHook(void *fd, void *f, void *arg) {
-    debug_log("SSL_BadCertHook: bypass");
-    int (*real)(void*, void*, void*) = (int (*)(void*, void*, void*))
-        LOAD_FN(FN_SSL_BAD_CERT_HOOK, "SSL_BadCertHook");
-    if (real) return real(fd, nss_bad_cb, arg);
-    return 0;
-}
+BYPASS_LOAD_CALL_CB(SSL_BadCertHook, FN_SSL_BAD_CERT_HOOK, nss_bad_cb)
 
-int CERT_VerifyCertNow(void *handle, void *cert, int checkSig, void *pwarg, void *usage) {
-    debug_log("CERT_VerifyCertNow: bypass");
-    return 0;
-}
+BYPASS_RETURN5(CERT_VerifyCertNow, int, void*, int, void*, void*, 0)
 
-int CERT_VerifyCert(void *handle, void *cert, int checkSig, int certUsage, 
-                    long long time, void *wincx, void *log) {
-    debug_log("CERT_VerifyCert: bypass");
-    return 0;
-}
+BYPASS_RETURN7(CERT_VerifyCert, int, void*, int, int, long long, void*, void*, 0)
 
-int CERT_VerifyCertificate(void *handle, void *cert, int checkSig, int requiredUsages, 
-                          long long time, void *wincx, void *log, int *returnedUsages) {
-    debug_log("CERT_VerifyCertificate: bypass");
-    if (returnedUsages) *returnedUsages = requiredUsages;
-    return 0;
-}
+BYPASS_RETURN8_SPECIAL(CERT_VerifyCertificate, int, void*, int, int, long long, void*, void*, int*)
 
-int SSL_SetTrustAnchors(void *fd, void *list) {
-    debug_log("SSL_SetTrustAnchors: bypass");
-    return 0;
-}
+BYPASS_RETURN2(SSL_SetTrustAnchors, int, void*, 0)
 
 /* =========================== mbedTLS Hooks =========================== */
 
-void mbedtls_ssl_conf_authmode(void *conf, int authmode) {
-    debug_log("mbedtls_ssl_conf_authmode: bypass");
-    void (*real)(void*, int) = (void (*)(void*, int))
-        LOAD_FN(FN_MBEDTLS_SSL_CONF_AUTHMODE, "mbedtls_ssl_conf_authmode");
-    if (real) real(conf, 0);
-}
+BYPASS_LOAD_CALL_VOID2(mbedtls_ssl_conf_authmode, FN_MBEDTLS_SSL_CONF_AUTHMODE, int, 0)
 
 void mbedtls_ssl_conf_verify(void *conf, void *f_vrfy, void *p_vrfy) {
     debug_log("mbedtls_ssl_conf_verify: bypass");
@@ -552,19 +549,11 @@ void mbedtls_ssl_conf_verify(void *conf, void *f_vrfy, void *p_vrfy) {
     if (real) real(conf, mbedtls_verify_cb, NULL);
 }
 
-int mbedtls_ssl_set_hostname(void *ssl, const char *hostname) {
-    debug_log("mbedtls_ssl_set_hostname: bypass");
-    return 0;
-}
+BYPASS_RETURN2(mbedtls_ssl_set_hostname, int, const char*, 0)
 
-unsigned int mbedtls_ssl_get_verify_result(const void *ssl) {
-    debug_log("mbedtls_ssl_get_verify_result: bypass");
-    return 0;
-}
+BYPASS_RETURN(mbedtls_ssl_get_verify_result, unsigned int, 0)
 
-void mbedtls_ssl_conf_ca_chain(void *conf, void *ca_chain, void *ca_crl) {
-    debug_log("mbedtls_ssl_conf_ca_chain: bypass");
-}
+BYPASS_VOID3(mbedtls_ssl_conf_ca_chain, void*, void*)
 
 int mbedtls_x509_crt_verify(void *crt, void *trust_ca, void *ca_crl, const char *cn, 
                            unsigned int *flags, void *f_vrfy, void *p_vrfy) {
@@ -596,19 +585,16 @@ void wolfSSL_set_verify(void *ssl, int mode, void *cb) {
     if (real) real(ssl, mode, mode ? wolfssl_verify_cb : NULL);
 }
 
-void wolfSSL_set_verify_depth(void *ssl, int depth) {
-    debug_log("wolfSSL_set_verify_depth: bypass");
-}
+BYPASS_VOID2(wolfSSL_set_verify_depth, int)
 
-int wolfSSL_check_domain_name(void *ssl, const char *dn) {
-    debug_log("wolfSSL_check_domain_name: bypass");
-    return 1;
-}
+BYPASS_RETURN2(wolfSSL_check_domain_name, int, const char*, 1)
 
-long wolfSSL_get_verify_result(void *ssl) {
-    debug_log("wolfSSL_get_verify_result: bypass");
-    return 0;
-}
+BYPASS_RETURN(wolfSSL_get_verify_result, long, 0)
+
+/* Additional wolfSSL functions from user's request */
+BYPASS_RETURN3(wolfSSL_CTX_load_verify_locations, int, const char*, const char*, 1)
+
+BYPASS_RETURN3(wolfSSL_CTX_trust_peer_cert, int, const char*, int, 1)
 
 /* =========================== libcurl Hooks =========================== */
 
