@@ -349,6 +349,14 @@ int name(void *arg1, arg2_type arg2, arg3_type arg3) { \
     return 0; \
 }
 
+/* Bypass with five args that sets double pointer to NULL */
+#define BYPASS_RETURN5_NULLIFY(name, ret_type, arg2_type, arg3_type, arg4_type, arg5_type, ret_val) \
+ret_type name(void *arg1, arg2_type arg2, arg3_type arg3, arg4_type arg4, arg5_type arg5) { \
+    debug_log(#name ": bypass"); \
+    if (arg5) *arg5 = NULL; \
+    return ret_val; \
+}
+
 /* Bypass that loads and calls real function with callback replacement */
 #define BYPASS_LOAD_CALL_CB(name, fn_id, callback) \
 int name(void *arg1, void *arg2, void *arg3) { \
@@ -398,11 +406,13 @@ static int mbedtls_verify_cb(void *p_vrfy, void *crt, int depth, unsigned int *f
     return 0;
 }
 
-/* wolfSSL callback */
+/* wolfSSL callback - not used with simplified macros */
+/*
 static int wolfssl_verify_cb(int preverify_ok, void *ctx) {
     debug_log("wolfSSL verify: bypass");
     return 1;
 }
+*/
 
 /* =========================== OpenSSL/BoringSSL/LibreSSL Hooks =========================== */
 
@@ -452,11 +462,7 @@ BYPASS_VOID2(X509_STORE_CTX_set_current_cert, void*)
 
 BYPASS_RETURN2(X509_STORE_set_flags, int, unsigned long, 1)
 
-int X509_check_host(void *x, const char *chk, size_t chklen, unsigned int flags, char **peername) {
-    debug_log("X509_check_host: bypass");
-    if (peername) *peername = NULL;
-    return 1;
-}
+BYPASS_RETURN5_NULLIFY(X509_check_host, int, const char*, size_t, unsigned int, char**, 1)
 
 BYPASS_RETURN4(X509_check_email, int, const char*, size_t, unsigned int, 1)
 
@@ -571,19 +577,9 @@ int mbedtls_x509_crt_verify_with_profile(void *crt, void *trust_ca, void *ca_crl
 
 /* =========================== wolfSSL Hooks =========================== */
 
-void wolfSSL_CTX_set_verify(void *ctx, int mode, void *cb) {
-    debug_log("wolfSSL_CTX_set_verify: bypass");
-    void (*real)(void*, int, void*) = (void (*)(void*, int, void*))
-        LOAD_FN(FN_WOLFSSL_CTX_SET_VERIFY, "wolfSSL_CTX_set_verify");
-    if (real) real(ctx, mode, mode ? wolfssl_verify_cb : NULL);
-}
+BYPASS_LOAD_CALL_VOID3(wolfSSL_CTX_set_verify, FN_WOLFSSL_CTX_SET_VERIFY, int, void*, 0, NULL)
 
-void wolfSSL_set_verify(void *ssl, int mode, void *cb) {
-    debug_log("wolfSSL_set_verify: bypass");
-    void (*real)(void*, int, void*) = (void (*)(void*, int, void*))
-        LOAD_FN(FN_WOLFSSL_SET_VERIFY, "wolfSSL_set_verify");
-    if (real) real(ssl, mode, mode ? wolfssl_verify_cb : NULL);
-}
+BYPASS_LOAD_CALL_VOID3(wolfSSL_set_verify, FN_WOLFSSL_SET_VERIFY, int, void*, 0, NULL)
 
 BYPASS_VOID2(wolfSSL_set_verify_depth, int)
 
