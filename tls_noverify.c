@@ -190,6 +190,9 @@ enum {
 static void *portable_dlsym(const char *symbol) {
     void *sym = NULL;
     
+    /* Get our own address to check if we're trying to load ourselves */
+    void *our_addr = dlsym(RTLD_DEFAULT, symbol);
+    
 #if defined(PLATFORM_SOLARIS)
     /* Solaris: Try RTLD_PROBE first */
     #ifdef RTLD_PROBE
@@ -202,6 +205,12 @@ static void *portable_dlsym(const char *symbol) {
     sym = dlsym(RTLD_NEXT, symbol);
     if (!sym) sym = dlsym(NULL, symbol);
 #endif
+    
+    /* If RTLD_NEXT returns our own function, return NULL to prevent recursion */
+    if (sym == our_addr) {
+        debug_log("portable_dlsym: detected self-reference, returning NULL");
+        return NULL;
+    }
     
     return sym;
 }
@@ -593,16 +602,6 @@ void wolfSSL_set_verify_depth(void *ssl, int depth) {
 
 int wolfSSL_check_domain_name(void *ssl, const char *dn) {
     debug_log("wolfSSL_check_domain_name: bypass");
-    return 1;
-}
-
-int wolfSSL_CTX_load_verify_locations(void *ctx, const char *file, const char *path) {
-    debug_log("wolfSSL_CTX_load_verify_locations: bypass");
-    return 1;
-}
-
-int wolfSSL_CTX_trust_peer_cert(void *ctx, const char *file, int type) {
-    debug_log("wolfSSL_CTX_trust_peer_cert: bypass");
     return 1;
 }
 

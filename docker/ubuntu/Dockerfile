@@ -87,7 +87,9 @@ RUN cd tests && make test_all
 # Create a test runner script
 RUN echo '#!/bin/bash' > /tls-preloader/run_tests.sh && \
     echo 'export LD_PRELOAD=/tls-preloader/libtlsnoverify.so' >> /tls-preloader/run_tests.sh && \
+    echo 'export TLS_NOVERIFY_DEBUG=1' >> /tls-preloader/run_tests.sh && \
     echo 'echo "Running tests with LD_PRELOAD=$LD_PRELOAD"' >> /tls-preloader/run_tests.sh && \
+    echo 'echo "Debug mode enabled: TLS_NOVERIFY_DEBUG=$TLS_NOVERIFY_DEBUG"' >> /tls-preloader/run_tests.sh && \
     echo 'cd /tls-preloader/tests' >> /tls-preloader/run_tests.sh && \
     echo './test_all' >> /tls-preloader/run_tests.sh && \
     chmod +x /tls-preloader/run_tests.sh

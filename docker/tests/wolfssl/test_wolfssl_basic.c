@@ -120,34 +120,9 @@ int test_wolfssl_check_domain_name(void) {
     
     /* Call with NULL SSL - should return success (1) */
     int ret = wolfSSL_check_domain_name(NULL, "test.example.com");
-    
+    print("asdasd1\n");
     TEST_LOG("wolfSSL_check_domain_name returned %d (expected 1)", ret);
-    
-    dlclose(handle);
-    
-    if (ret != 1) {
-        return TEST_FAIL;
-    }
-    
-    return TEST_PASS;
-}
-
-int test_wolfssl_ctx_load_verify_locations(void) {
-    void *handle = dlopen(NULL, RTLD_LAZY);
-    if (!handle) return TEST_SKIP;
-    
-    int (*wolfSSL_CTX_load_verify_locations)(WOLFSSL_CTX*, const char*, const char*) = 
-        dlsym(handle, "wolfSSL_CTX_load_verify_locations");
-    
-    if (!wolfSSL_CTX_load_verify_locations) {
-        dlclose(handle);
-        return TEST_SKIP;
-    }
-    
-    /* Call with NULL context - should return success (1) */
-    int ret = wolfSSL_CTX_load_verify_locations(NULL, "/etc/ssl/certs/ca-certificates.crt", NULL);
-    
-    TEST_LOG("wolfSSL_CTX_load_verify_locations returned %d (expected 1)", ret);
+    print("asdasd\n");
     
     dlclose(handle);
     
@@ -166,7 +141,6 @@ int main(void) {
     RUN_TEST("wolfSSL_CTX_set_verify bypass", test_wolfssl_ctx_set_verify);
     RUN_TEST("wolfSSL_set_verify bypass", test_wolfssl_set_verify);
     RUN_TEST("wolfSSL_check_domain_name bypass", test_wolfssl_check_domain_name);
-    RUN_TEST("wolfSSL_CTX_load_verify_locations bypass", test_wolfssl_ctx_load_verify_locations);
     
     TEST_LOG("All tests passed!");
     return 0;

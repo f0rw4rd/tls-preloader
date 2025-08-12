@@ -190,8 +190,7 @@ int test_wolfssl_bypass(void) {
     lib_test_case_t tests[] = {
         {"wolfSSL_CTX_set_verify", "wolfSSL_CTX_set_verify", LIB_TEST_FUNCTION_EXISTS, 0, NULL},
         {"wolfSSL_set_verify", "wolfSSL_set_verify", LIB_TEST_FUNCTION_EXISTS, 0, NULL},
-        {"wolfSSL_check_domain_name", "wolfSSL_check_domain_name", LIB_TEST_FUNCTION_RETURNS, 1, NULL},
-        {"wolfSSL_CTX_load_verify_locations", "wolfSSL_CTX_load_verify_locations", LIB_TEST_FUNCTION_EXISTS, 0, NULL}
+        {"wolfSSL_check_domain_name", "wolfSSL_check_domain_name", LIB_TEST_FUNCTION_RETURNS, 1, NULL},      
     };
     
     return run_library_tests("wolfSSL", tests, sizeof(tests)/sizeof(tests[0]));

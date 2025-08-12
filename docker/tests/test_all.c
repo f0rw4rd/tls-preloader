@@ -138,10 +138,14 @@ static int test_command_tools(void) {
 
 /* Main test runner */
 int main(void) {
+    /* Enable debug logging for TLS bypass library */
+    setenv("TLS_NOVERIFY_DEBUG", "1", 1);
+    
     test_init();
     
     TEST_LOG("TLS Verification Bypass Test Suite");
     TEST_LOG("===================================");
+    TEST_LOG("Debug mode enabled (TLS_NOVERIFY_DEBUG=1)");
     
     /* Check LD_PRELOAD */
     if (!g_ld_preload || !strstr(g_ld_preload, "libtlsnoverify.so")) {
