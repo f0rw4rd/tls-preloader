@@ -1,0 +1,6 @@
+# Compiled libraries
+*.so
+
+# Documentation files (except README)
+*.md
+!README.md
