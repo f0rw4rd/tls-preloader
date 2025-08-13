@@ -17,9 +17,12 @@ LDFLAGS_STATIC = -static-libgcc -Wl,-Bstatic -ldl -Wl,-Bdynamic
 
 all: libtlsnoverify.so
 
+# Get git commit ID
+GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
 # Standard build
 libtlsnoverify.so: tls_noverify.c
-	$(CC) $(CFLAGS_BASE) $(CFLAGS_COMPAT) $(LDFLAGS) -o $@ $< -ldl
+	$(CC) $(CFLAGS_BASE) $(CFLAGS_COMPAT) -D__GIT_COMMIT__=\"$(GIT_COMMIT)\" $(LDFLAGS) -o $@ $< -ldl
 	$(STRIP) --strip-unneeded $@
 
 clean:

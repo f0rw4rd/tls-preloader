@@ -1,9 +1,9 @@
-/* Universal TLS certificate verification bypass library
- * Supports: Linux, FreeBSD, OpenBSD, NetBSD, Solaris, AIX, macOS
- * Compatible with: OpenSSL, BoringSSL, LibreSSL, GnuTLS, NSS, mbedTLS, wolfSSL, curl
+/* TLS certificate verification bypass
+ * Platforms: Linux, FreeBSD, OpenBSD, NetBSD, Solaris, AIX, macOS
+ * Libraries: OpenSSL, BoringSSL, LibreSSL, GnuTLS, NSS, mbedTLS, wolfSSL, curl
  */
 
-/* Platform detection and feature macros */
+/* Platform detection */
 #if defined(__linux__)
     #define PLATFORM_LINUX 1
     #define _GNU_SOURCE
@@ -38,6 +38,14 @@
 #include <time.h>
 #include <unistd.h>
 
+/* Backtrace support headers */
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
+    #include <execinfo.h>
+#endif
+#if defined(__sun) || defined(sun)
+    #include <ucontext.h>
+#endif
+
 /* RTLD_NEXT compatibility */
 #ifndef RTLD_NEXT
     #if defined(PLATFORM_SOLARIS)
@@ -51,21 +59,25 @@
 
 /* =========================== Thread Safety =========================== */
 
-/* Choose thread safety mechanism based on platform */
+/* Thread safety primitives */
 #if defined(PLATFORM_LINUX) && !defined(__ANDROID__)
-    /* Linux: Use futex for best performance */
+    /* Linux: pthread mutex */
     #include <sys/syscall.h>
     #include <linux/futex.h>
     #include <pthread.h>
+    #ifndef __NR_gettid
+        #define __NR_gettid 186  /* x86_64 */
+    #endif
     
     static pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
     #define LOCK() pthread_mutex_lock(&g_mutex)
     #define UNLOCK() pthread_mutex_unlock(&g_mutex)
     
 #elif defined(PLATFORM_SOLARIS)
-    /* Solaris: Use atomic operations */
+    /* Solaris: atomic ops */
     #include <atomic.h>
     #include <sched.h>
+    #include <thread.h>
     
     typedef volatile uint_t portable_mutex_t;
     static portable_mutex_t g_mutex = 0;
@@ -83,7 +95,7 @@
     }
     
 #elif defined(PLATFORM_FREEBSD) || defined(PLATFORM_NETBSD) || defined(PLATFORM_MACOS)
-    /* BSD/macOS: Use pthread */
+    /* BSD/macOS: pthread */
     #include <pthread.h>
     
     static pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -91,8 +103,9 @@
     #define UNLOCK() pthread_mutex_unlock(&g_mutex)
     
 #elif defined(PLATFORM_OPENBSD)
-    /* OpenBSD: Use simple atomics */
+    /* OpenBSD: atomics + barriers */
     #include <sys/atomic.h>
+    #include <unistd.h>
     
     static volatile unsigned int g_mutex = 0;
     
@@ -100,14 +113,16 @@
         while (atomic_swap_uint(&g_mutex, 1) != 0) {
             sched_yield();
         }
+        __sync_synchronize();
     }
     
     static void UNLOCK(void) {
+        __sync_synchronize();
         atomic_swap_uint(&g_mutex, 0);
     }
     
 #else
-    /* Fallback: Use GCC builtins if available */
+    /* Fallback: GCC builtins */
     #ifdef __GNUC__
         static volatile int g_mutex = 0;
         
@@ -121,7 +136,7 @@
             __sync_lock_release(&g_mutex);
         }
     #else
-        /* No thread safety */
+        /* No-op */
         #define LOCK() (void)0
         #define UNLOCK() (void)0
     #endif
@@ -129,8 +144,51 @@
 
 /* =========================== Core Infrastructure =========================== */
 
+/* SSL/TLS return codes */
+#define SSL_VERIFY_NONE 0x00
+#define SSL_VERIFY_OK 1
+#define X509_V_OK 0x0L
+#define SEC_SUCCESS 0
+#define WOLFSSL_SUCCESS 1
+#define MBEDTLS_SSL_VERIFY_NONE 0
+
+/* Function pointer types */
+typedef int (*ssl_verify_callback_t)(void *store_ctx, void *arg);
+typedef void (*ssl_ctx_verify_func_t)(void *ctx, int mode, void *callback);
+typedef int (*gnutls_verify_func_t)(void *session);
+typedef int (*nss_auth_callback_t)(void *arg, void *fd, int checkSig, int isServer);
+typedef int (*mbedtls_verify_callback_t)(void *p_vrfy, void *crt, int depth, unsigned int *flags);
+typedef int (*curl_setopt_func_t)(void *curl, int option, ...);
+typedef int (*curl_getinfo_func_t)(void *curl, int info, ...);
+
 /* Debug logging */
 static int g_debug = -1;
+static int g_backtrace = -1;
+
+/* Get thread ID portably */
+static unsigned long get_thread_id(void) {
+#if defined(PLATFORM_LINUX) && defined(__NR_gettid)
+    /* Linux: syscall for actual thread ID */
+    return (unsigned long)syscall(__NR_gettid);
+#elif defined(PLATFORM_FREEBSD) || defined(PLATFORM_NETBSD) || defined(PLATFORM_MACOS)
+    /* BSD/macOS: pthread_self */
+    return (unsigned long)pthread_self();
+#elif defined(PLATFORM_OPENBSD)
+    /* OpenBSD: getthrid */
+    return (unsigned long)getthrid();
+#elif defined(PLATFORM_SOLARIS)
+    /* Solaris: thr_self */
+    thread_t tid;
+    thr_self(&tid);
+    return (unsigned long)tid;
+#elif defined(PLATFORM_AIX)
+    /* AIX: pthread_self */
+    return (unsigned long)pthread_self();
+#else
+    /* Fallback: just return 0 */
+    return 0;
+#endif
+}
 
 static void debug_log(const char *msg) {
     if (g_debug == -1) {
@@ -139,12 +197,95 @@ static void debug_log(const char *msg) {
     }
     if (g_debug) {
         const char prefix[] = "[TLS_NOVERIFY] ";
+        char id_str[64];
         ssize_t ret;
+        
+        /* Add PID and TID */
+        unsigned long tid = get_thread_id();
+        int id_len = snprintf(id_str, sizeof(id_str), "[%d:%lu] ", 
+                              (int)getpid(), tid);
+        
         ret = write(2, prefix, sizeof(prefix) - 1);
+        if (id_len > 0 && id_len < sizeof(id_str)) {
+            ret = write(2, id_str, id_len);
+        }
         ret = write(2, msg, strlen(msg));
         ret = write(2, "\n", 1);
-        (void)ret; /* Silence unused variable warning */
+        (void)ret;
     }
+}
+
+/* Printf-style debug logging */
+static void debug_logf(const char *fmt, ...) {
+    if (g_debug == -1) {
+        const char *env = getenv("TLS_NOVERIFY_DEBUG");
+        g_debug = (env && *env != '\0');
+    }
+    if (g_debug) {
+        char buffer[512];
+        va_list args;
+        va_start(args, fmt);
+        int len = vsnprintf(buffer, sizeof(buffer), fmt, args);
+        va_end(args);
+        
+        if (len > 0 && len < sizeof(buffer)) {
+            debug_log(buffer);
+        }
+    }
+}
+
+/* Portable backtrace */
+static void print_backtrace(const char *func_name) {
+    if (g_backtrace == -1) {
+        const char *env = getenv("TLS_NOVERIFY_BACKTRACE");
+        g_backtrace = (env && *env != '\0');
+    }
+    if (!g_backtrace) return;
+    
+    debug_logf("=== Backtrace for %s ===", func_name);
+    
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_FREEBSD) || defined(PLATFORM_MACOS)
+    #include <execinfo.h>
+    void *array[20];  /* Increased from 10 */
+    size_t size;
+    char **strings;
+    
+    size = backtrace(array, 20);  /* Capture up to 20 frames */
+    strings = backtrace_symbols(array, size);
+    
+    if (strings) {
+        /* Skip first frame (this function), show up to 15 frames */
+        size_t max_frames = (size > 16) ? 16 : size;
+        for (size_t i = 1; i < max_frames; i++) {
+            debug_logf("  [%zu] %s", i-1, strings[i]);
+        }
+        if (size > 16) {
+            debug_logf("  ... (%zu more frames)", size - 16);
+        }
+        free(strings);
+    }
+#elif defined(PLATFORM_SOLARIS)
+    /* Solaris: manual stack walk */
+    void *fp = __builtin_frame_address(0);
+    int depth = 0;
+    while (fp && depth < 15) {  /* Increased from 5 */
+        void *ret = *((void**)fp + 1);
+        Dl_info info;
+        if (dladdr(ret, &info) && info.dli_sname) {
+            debug_logf("  [%d] %s", depth, info.dli_sname);
+        } else if (dladdr(ret, &info) && info.dli_fname) {
+            /* Show filename if symbol name not available */
+            debug_logf("  [%d] %s+%p", depth, info.dli_fname, 
+                      (char*)ret - (char*)info.dli_fbase);
+        }
+        fp = *(void**)fp;
+        depth++;
+    }
+#else
+    debug_log("  Backtrace not supported on this platform");
+#endif
+    
+    debug_log("===========================");
 }
 
 /* Function pointer storage */
@@ -190,32 +331,31 @@ enum {
 static void *portable_dlsym(const char *symbol) {
     void *sym = NULL;
     
-    /* Get our own address to check if we're trying to load ourselves */
+    /* Check for self-reference */
     void *our_addr = dlsym(RTLD_DEFAULT, symbol);
     
 #if defined(PLATFORM_SOLARIS)
-    /* Solaris: Try RTLD_PROBE first */
+    /* Solaris: RTLD_PROBE */
     #ifdef RTLD_PROBE
         sym = dlsym(RTLD_PROBE, symbol);
     #endif
     if (!sym) sym = dlsym(RTLD_NEXT, symbol);
     if (!sym) sym = dlsym(RTLD_DEFAULT, symbol);
 #else
-    /* Standard approach */
     sym = dlsym(RTLD_NEXT, symbol);
     if (!sym) sym = dlsym(NULL, symbol);
 #endif
     
-    /* If RTLD_NEXT returns our own function, return NULL to prevent recursion */
+    /* Prevent recursion */
     if (sym == our_addr) {
-        debug_log("portable_dlsym: detected self-reference, returning NULL");
+        debug_logf("portable_dlsym: self-reference %s", symbol);
         return NULL;
     }
     
     return sym;
 }
 
-/* Thread-safe function loading with caching */
+/* Thread-safe function loader */
 static void *load_func(int id, const char *name) {
     void *func;
     
@@ -235,136 +375,173 @@ static void *load_func(int id, const char *name) {
     return func;
 }
 
-/* Convenience macros */
 #define LOAD_FN(id, name) load_func(id, name)
 
 /* Function generator macros */
-/* Simple bypass that returns a constant */
+/* Return constant */
 #define BYPASS_RETURN(name, ret_type, ret_val) \
 ret_type name(void *arg) { \
     debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
     return ret_val; \
 }
 
-/* Bypass with two args returning constant */
+/* 2 args, return constant */
 #define BYPASS_RETURN2(name, ret_type, arg2_type, ret_val) \
 ret_type name(void *arg1, arg2_type arg2) { \
     debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
     return ret_val; \
 }
 
-/* Bypass with three args returning constant */
+/* 3 args, return constant */
 #define BYPASS_RETURN3(name, ret_type, arg2_type, arg3_type, ret_val) \
 ret_type name(void *arg1, arg2_type arg2, arg3_type arg3) { \
     debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
     return ret_val; \
 }
 
-/* Bypass with four args returning constant */
+/* 4 args, return constant */
 #define BYPASS_RETURN4(name, ret_type, arg2_type, arg3_type, arg4_type, ret_val) \
 ret_type name(void *arg1, arg2_type arg2, arg3_type arg3, arg4_type arg4) { \
     debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
     return ret_val; \
 }
 
-/* Bypass with five args returning constant */
+/* 5 args, return constant */
 #define BYPASS_RETURN5(name, ret_type, arg2_type, arg3_type, arg4_type, arg5_type, ret_val) \
 ret_type name(void *arg1, arg2_type arg2, arg3_type arg3, arg4_type arg4, arg5_type arg5) { \
     debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
     return ret_val; \
 }
 
-/* Bypass with seven args returning constant (for NSS functions) */
+/* 7 args, return constant (NSS) */
 #define BYPASS_RETURN7(name, ret_type, arg2_type, arg3_type, arg4_type, arg5_type, arg6_type, arg7_type, ret_val) \
 ret_type name(void *arg1, arg2_type arg2, arg3_type arg3, arg4_type arg4, \
               arg5_type arg5, arg6_type arg6, arg7_type arg7) { \
     debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
     return ret_val; \
 }
 
-/* Bypass with eight args returning constant with special handling */
+/* 8 args, special handling */
 #define BYPASS_RETURN8_SPECIAL(name, ret_type, arg2_type, arg3_type, arg4_type, arg5_type, arg6_type, arg7_type, arg8_type) \
 ret_type name(void *arg1, arg2_type arg2, arg3_type arg3, arg4_type arg4, \
               arg5_type arg5, arg6_type arg6, arg7_type arg7, arg8_type arg8) { \
     debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
     if (arg8) *arg8 = arg4; \
     return 0; \
 }
 
-/* Void bypass with four args */
+/* 4 args, void */
 #define BYPASS_VOID4(name, arg2_type, arg3_type, arg4_type) \
 void name(void *arg1, arg2_type arg2, arg3_type arg3, arg4_type arg4) { \
     debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
 }
 
-/* Simple void bypass */
+/* Void return */
 #define BYPASS_VOID(name) \
 void name(void *arg) { \
     debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
 }
 
-/* Void bypass with two args */
+/* 2 args, void */
 #define BYPASS_VOID2(name, arg2_type) \
 void name(void *arg1, arg2_type arg2) { \
     debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
 }
 
-/* Void bypass with three args */
+/* 3 args, void */
 #define BYPASS_VOID3(name, arg2_type, arg3_type) \
 void name(void *arg1, arg2_type arg2, arg3_type arg3) { \
     debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
 }
 
-/* Bypass that loads and calls real function with modified args */
+/* Modified args */
 #define BYPASS_LOAD_CALL_VOID2(name, fn_id, arg2_type, new_arg2) \
 void name(void *arg1, arg2_type arg2) { \
     debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
     void (*real)(void*, arg2_type) = (void (*)(void*, arg2_type)) \
         LOAD_FN(fn_id, #name); \
     if (real) real(arg1, new_arg2); \
 }
 
-/* Bypass that loads and calls real function with modified args (3 args) */
+/* Modified args (3) */
 #define BYPASS_LOAD_CALL_VOID3(name, fn_id, arg2_type, arg3_type, new_arg2, new_arg3) \
 void name(void *arg1, arg2_type arg2, arg3_type arg3) { \
     debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
     void (*real)(void*, arg2_type, arg3_type) = (void (*)(void*, arg2_type, arg3_type)) \
         LOAD_FN(fn_id, #name); \
     if (real) real(arg1, new_arg2, new_arg3); \
 }
 
-/* Special bypass for functions that return 0 and set status pointer (2 args) */
+/* Return 0, set status ptr (2) */
 #define BYPASS_RETURN_STATUS2(name, arg2_type) \
 int name(void *arg1, arg2_type arg2) { \
     debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
     if (arg2) *arg2 = 0; \
     return 0; \
 }
 
-/* Special bypass for functions that return 0 and set status pointer (3 args) */
+/* Return 0, set status ptr (3) */
 #define BYPASS_RETURN_STATUS3(name, arg2_type, arg3_type) \
 int name(void *arg1, arg2_type arg2, arg3_type arg3) { \
     debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
     if (arg3) *arg3 = 0; \
     return 0; \
 }
 
-/* Bypass with five args that sets double pointer to NULL */
+/* 5 args, nullify ptr */
 #define BYPASS_RETURN5_NULLIFY(name, ret_type, arg2_type, arg3_type, arg4_type, arg5_type, ret_val) \
 ret_type name(void *arg1, arg2_type arg2, arg3_type arg3, arg4_type arg4, arg5_type arg5) { \
     debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
     if (arg5) *arg5 = NULL; \
     return ret_val; \
 }
 
-/* Bypass that loads and calls real function with callback replacement */
+/* Replace callback */
 #define BYPASS_LOAD_CALL_CB(name, fn_id, callback) \
 int name(void *arg1, void *arg2, void *arg3) { \
     debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
     int (*real)(void*, void*, void*) = (int (*)(void*, void*, void*)) \
         LOAD_FN(fn_id, #name); \
     if (real) return real(arg1, callback, arg3); \
     return 0; \
+}
+
+/* Replace callback with specific type */
+#define BYPASS_LOAD_CALL_CB_TYPED(name, fn_id, callback, cb_type) \
+void name(void *arg1, void *arg2, void *arg3) { \
+    debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
+    void (*real)(void*, cb_type, void*) = \
+        (void (*)(void*, cb_type, void*)) \
+        LOAD_FN(fn_id, #name); \
+    if (real) real(arg1, callback, arg3); \
+}
+
+/* Replace callback (3 args, 2nd is int) */
+#define BYPASS_LOAD_CALL_CB_INT(name, fn_id, callback) \
+void name(void *arg1, int arg2, void *arg3) { \
+    debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
+    void (*real)(void*, int, void*) = (void (*)(void*, int, void*)) \
+        LOAD_FN(fn_id, #name); \
+    if (real) real(arg1, arg2, callback); \
 }
 
 /* =========================== Callback Functions =========================== */
@@ -376,37 +553,33 @@ static int openssl_verify_cb(void *store_ctx, void *arg) {
 }
 
 
-/* BoringSSL callback */
 static int boringssl_custom_verify(void *ssl, unsigned char *out_alert) {
     debug_log("BoringSSL custom verify: bypass");
-    return 0; /* ssl_verify_ok */
+    return 0;
 }
 
-/* GnuTLS callback */
 static int gnutls_verify_cb(void *session) {
     debug_log("GnuTLS verify: bypass");
     return 0;
 }
 
-/* NSS callbacks */
 static int nss_auth_cb(void *arg, void *fd, int checkSig, int isServer) {
     debug_log("NSS auth: bypass");
-    return 0; /* SECSuccess */
+    return SEC_SUCCESS;
 }
 
 static int nss_bad_cb(void *arg, void *fd) {
     debug_log("NSS bad cert: bypass");
-    return 0; /* SECSuccess */
+    return SEC_SUCCESS;
 }
 
-/* mbedTLS callback */
 static int mbedtls_verify_cb(void *p_vrfy, void *crt, int depth, unsigned int *flags) {
     debug_log("mbedTLS verify: bypass");
     if (flags) *flags = 0;
     return 0;
 }
 
-/* wolfSSL callback - not used with simplified macros */
+/* Unused */
 /*
 static int wolfssl_verify_cb(int preverify_ok, void *ctx) {
     debug_log("wolfSSL verify: bypass");
@@ -420,23 +593,13 @@ BYPASS_LOAD_CALL_VOID3(SSL_CTX_set_verify, FN_SSL_CTX_SET_VERIFY, int, void*, 0,
 
 BYPASS_LOAD_CALL_VOID3(SSL_set_verify, FN_SSL_SET_VERIFY, int, void*, 0, NULL)
 
-void SSL_CTX_set_cert_verify_callback(void *ctx, void *cb, void *arg) {
-    debug_log("SSL_CTX_set_cert_verify_callback: bypass");
-    void (*real)(void*, int (*)(void*, void*), void*) = (void (*)(void*, int (*)(void*, void*), void*))
-        LOAD_FN(FN_SSL_CTX_SET_CERT_VERIFY_CB, "SSL_CTX_set_cert_verify_callback");
-    if (real) real(ctx, openssl_verify_cb, arg);
-}
+BYPASS_LOAD_CALL_CB_TYPED(SSL_CTX_set_cert_verify_callback, FN_SSL_CTX_SET_CERT_VERIFY_CB, openssl_verify_cb, ssl_verify_callback_t)
 
-void SSL_CTX_set_custom_verify(void *ctx, int mode, void *cb) {
-    debug_log("SSL_CTX_set_custom_verify: bypass");
-    void (*real)(void*, int, void*) = (void (*)(void*, int, void*))
-        LOAD_FN(FN_SSL_CTX_SET_CUSTOM_VERIFY, "SSL_CTX_set_custom_verify");
-    if (real) real(ctx, mode, boringssl_custom_verify);
-}
+BYPASS_LOAD_CALL_CB_INT(SSL_CTX_set_custom_verify, FN_SSL_CTX_SET_CUSTOM_VERIFY, boringssl_custom_verify)
 
 BYPASS_RETURN(X509_verify_cert, int, 1)
 
-BYPASS_RETURN(SSL_get_verify_result, long, 0L) /* X509_V_OK */
+BYPASS_RETURN(SSL_get_verify_result, long, X509_V_OK)
 
 BYPASS_LOAD_CALL_VOID2(SSL_set_verify_result, FN_SSL_SET_VERIFY_RESULT, long, 0L)
 
@@ -474,16 +637,11 @@ BYPASS_RETURN3(X509_VERIFY_PARAM_set1_host, int, const char*, size_t, 1)
 
 BYPASS_RETURN2(X509_VERIFY_PARAM_set_hostflags, int, unsigned int, 1)
 
-BYPASS_RETURN(SSL_get_verify_mode, int, 0) /* SSL_VERIFY_NONE */
+BYPASS_RETURN(SSL_get_verify_mode, int, SSL_VERIFY_NONE)
 
 /* =========================== GnuTLS Hooks =========================== */
 
-void gnutls_certificate_set_verify_function(void *cred, void *func) {
-    debug_log("gnutls_certificate_set_verify_function: bypass");
-    void (*real)(void*, void*) = (void (*)(void*, void*))
-        LOAD_FN(FN_GNUTLS_CERT_SET_VERIFY_FN, "gnutls_certificate_set_verify_function");
-    if (real) real(cred, (void*)gnutls_verify_cb);
-}
+BYPASS_LOAD_CALL_VOID2(gnutls_certificate_set_verify_function, FN_GNUTLS_CERT_SET_VERIFY_FN, void*, (void*)gnutls_verify_cb)
 
 BYPASS_RETURN_STATUS2(gnutls_certificate_verify_peers2, unsigned int*)
 
@@ -500,6 +658,9 @@ BYPASS_RETURN3(gnutls_certificate_set_x509_trust_mem, int, const void*, int, 0)
 BYPASS_VOID3(gnutls_certificate_set_verify_limits, unsigned int, unsigned int)
 
 time_t gnutls_x509_crt_get_expiration_time(void *cert) {
+    debug_log("gnutls_x509_crt_get_expiration_time: intercept");
+    print_backtrace("gnutls_x509_crt_get_expiration_time");
+    
     time_t (*real)(void*) = (time_t (*)(void*))
         LOAD_FN(FN_GNUTLS_X509_GET_EXPIRY, "gnutls_x509_crt_get_expiration_time");
     
@@ -508,13 +669,16 @@ time_t gnutls_x509_crt_get_expiration_time(void *cert) {
         result = real(cert);
         if (result != (time_t)-1 && result < time(NULL)) {
             debug_log("gnutls_x509_crt_get_expiration_time: bypass expired");
-            return time(NULL) + 86400; /* Tomorrow */
+            return time(NULL) + 86400;
         }
     }
     return result;
 }
 
 time_t gnutls_x509_crt_get_activation_time(void *cert) {
+    debug_log("gnutls_x509_crt_get_activation_time: intercept");
+    print_backtrace("gnutls_x509_crt_get_activation_time");
+    
     time_t (*real)(void*) = (time_t (*)(void*))
         LOAD_FN(FN_GNUTLS_X509_GET_ACTIVATION, "gnutls_x509_crt_get_activation_time");
     
@@ -522,7 +686,7 @@ time_t gnutls_x509_crt_get_activation_time(void *cert) {
     if (real && cert) {
         result = real(cert);
         if (result != (time_t)-1 && result > time(NULL)) {
-            debug_log("gnutls_x509_crt_get_activation_time: bypass not-yet-valid");
+            debug_log("gnutls_x509_crt_get_activation_time: bypass");
             return 0;
         }
     }
@@ -547,13 +711,7 @@ BYPASS_RETURN2(SSL_SetTrustAnchors, int, void*, 0)
 
 BYPASS_LOAD_CALL_VOID2(mbedtls_ssl_conf_authmode, FN_MBEDTLS_SSL_CONF_AUTHMODE, int, 0)
 
-void mbedtls_ssl_conf_verify(void *conf, void *f_vrfy, void *p_vrfy) {
-    debug_log("mbedtls_ssl_conf_verify: bypass");
-    void (*real)(void*, int (*)(void*, void*, int, unsigned int*), void*) = 
-        (void (*)(void*, int (*)(void*, void*, int, unsigned int*), void*))
-        LOAD_FN(FN_MBEDTLS_SSL_CONF_VERIFY, "mbedtls_ssl_conf_verify");
-    if (real) real(conf, mbedtls_verify_cb, NULL);
-}
+BYPASS_LOAD_CALL_CB_TYPED(mbedtls_ssl_conf_verify, FN_MBEDTLS_SSL_CONF_VERIFY, mbedtls_verify_cb, mbedtls_verify_callback_t)
 
 BYPASS_RETURN2(mbedtls_ssl_set_hostname, int, const char*, 0)
 
@@ -564,6 +722,7 @@ BYPASS_VOID3(mbedtls_ssl_conf_ca_chain, void*, void*)
 int mbedtls_x509_crt_verify(void *crt, void *trust_ca, void *ca_crl, const char *cn, 
                            unsigned int *flags, void *f_vrfy, void *p_vrfy) {
     debug_log("mbedtls_x509_crt_verify: bypass");
+    print_backtrace("mbedtls_x509_crt_verify");
     if (flags) *flags = 0;
     return 0;
 }
@@ -571,6 +730,7 @@ int mbedtls_x509_crt_verify(void *crt, void *trust_ca, void *ca_crl, const char 
 int mbedtls_x509_crt_verify_with_profile(void *crt, void *trust_ca, void *ca_crl, void *profile,
                                          const char *cn, unsigned int *flags, void *f_vrfy, void *p_vrfy) {
     debug_log("mbedtls_x509_crt_verify_with_profile: bypass");
+    print_backtrace("mbedtls_x509_crt_verify_with_profile");
     if (flags) *flags = 0;
     return 0;
 }
@@ -587,7 +747,7 @@ BYPASS_RETURN2(wolfSSL_check_domain_name, int, const char*, 1)
 
 BYPASS_RETURN(wolfSSL_get_verify_result, long, 0)
 
-/* Additional wolfSSL functions from user's request */
+/* wolfSSL extensions */
 BYPASS_RETURN3(wolfSSL_CTX_load_verify_locations, int, const char*, const char*, 1)
 
 BYPASS_RETURN3(wolfSSL_CTX_trust_peer_cert, int, const char*, int, 1)
@@ -608,13 +768,21 @@ BYPASS_RETURN3(wolfSSL_CTX_trust_peer_cert, int, const char*, int, 1)
 #define CURLINFO_SSL_VERIFYRESULT 0x200025
 #define CURLINFO_PROXY_SSL_VERIFYRESULT 0x2000BF
 
+/* curl error codes */
+#define CURLE_OK 0
+#define CURLE_FAILED_INIT 2
+#define CURLE_BAD_FUNCTION_ARGUMENT 43
+
 void *curl_easy_init(void) {
+    debug_log("curl_easy_init: intercept");
+    print_backtrace("curl_easy_init");
+    
     void *(*real)(void) = (void *(*)(void))portable_dlsym("curl_easy_init");
     if (!real) return NULL;
     
     void *handle = real();
     if (handle) {
-        debug_log("curl_easy_init: new handle, disabling SSL verification");
+        debug_logf("curl_easy_init: handle %p", handle);
         void *setopt = portable_dlsym("curl_easy_setopt");
         if (setopt) {
             ((int (*)(void*, int, ...))setopt)(handle, CURLOPT_SSL_VERIFYPEER, 0L);
@@ -628,11 +796,17 @@ int curl_easy_setopt(void *curl, int option, ...) {
     va_list args;
     int result;
     
-    if (!curl) return 43; /* CURLE_BAD_FUNCTION_ARGUMENT */
+    if (!curl) return CURLE_BAD_FUNCTION_ARGUMENT;
     
-    int (*real)(void*, int, ...) = (int (*)(void*, int, ...))
+    /* Only trace important SSL options */
+    if (option == CURLOPT_SSL_VERIFYPEER || option == CURLOPT_SSL_VERIFYHOST) {
+        debug_log("curl_easy_setopt: bypass");
+        print_backtrace("curl_easy_setopt");
+    }
+    
+    curl_setopt_func_t real = (curl_setopt_func_t)
         LOAD_FN(FN_CURL_EASY_SETOPT, "curl_easy_setopt");
-    if (!real) return 2; /* CURLE_FAILED_INIT */
+    if (!real) return CURLE_FAILED_INIT;
     
     va_start(args, option);
     
@@ -645,13 +819,12 @@ int curl_easy_setopt(void *curl, int option, ...) {
         case CURLOPT_DOH_SSL_VERIFYPEER:
         case CURLOPT_DOH_SSL_VERIFYHOST:
         case CURLOPT_DOH_SSL_VERIFYSTATUS:
-            debug_log("curl_easy_setopt: SSL verify bypass");
             result = real(curl, option, 0L);
             break;
             
         case CURLOPT_PINNEDPUBLICKEY:
         case CURLOPT_PROXY_PINNEDPUBLICKEY:
-            debug_log("curl_easy_setopt: PINNEDPUBLICKEY bypass");
+            debug_log("curl_easy_setopt: bypass");
             result = real(curl, option, NULL);
             break;
             
@@ -668,19 +841,20 @@ int curl_easy_getinfo(void *curl, int info, ...) {
     va_list args;
     int result;
     
-    if (!curl) return 43; /* CURLE_BAD_FUNCTION_ARGUMENT */
+    if (!curl) return CURLE_BAD_FUNCTION_ARGUMENT;
     
-    int (*real)(void*, int, ...) = (int (*)(void*, int, ...))
+    curl_getinfo_func_t real = (curl_getinfo_func_t)
         LOAD_FN(FN_CURL_EASY_GETINFO, "curl_easy_getinfo");
-    if (!real) return 2; /* CURLE_FAILED_INIT */
+    if (!real) return CURLE_FAILED_INIT;
     
     va_start(args, info);
     
     if (info == CURLINFO_SSL_VERIFYRESULT || info == CURLINFO_PROXY_SSL_VERIFYRESULT) {
         long *result_ptr = va_arg(args, long*);
-        debug_log("curl_easy_getinfo: SSL_VERIFYRESULT bypass");
+        debug_log("curl_easy_getinfo: bypass");
+        print_backtrace("curl_easy_getinfo");
         if (result_ptr) *result_ptr = 0;
-        result = 0; /* CURLE_OK */
+        result = CURLE_OK;
     } else {
         void *arg = va_arg(args, void*);
         result = real(curl, info, arg);
@@ -699,11 +873,10 @@ static void init_library(void) {
         LOCK();
         if (!g_initialized) {
             g_initialized = 1;
-            debug_log("TLS verification bypass initialized (unified version)");
+            debug_logf("TLS verification bypass initialized (commit %s)", __GIT_COMMIT__);
             
-            /* Platform detection logging */
 #if defined(PLATFORM_LINUX)
-            debug_log("Platform: Linux");
+            debug_logf("Platform: Linux, TID support: %s", get_thread_id() ? "yes" : "no");
 #elif defined(PLATFORM_FREEBSD)
             debug_log("Platform: FreeBSD");
 #elif defined(PLATFORM_OPENBSD)
@@ -724,7 +897,7 @@ static void init_library(void) {
     }
 }
 
-/* Constructor where supported */
+/* Library constructor */
 #if defined(__GNUC__) || defined(__clang__)
     __attribute__((constructor))
     static void lib_init(void) {
@@ -736,7 +909,7 @@ static void init_library(void) {
         init_library();
     }
 #elif defined(_MSC_VER)
-    /* MSVC support if ever needed */
+    /* MSVC */
     #pragma section(".CRT$XCU",read)
     __declspec(allocate(".CRT$XCU")) 
     static void (*p_lib_init)(void) = lib_init;
@@ -745,10 +918,20 @@ static void init_library(void) {
     }
 #endif
 
-/* Destructor for cleanup */
+/* Library destructor */
 #if defined(__GNUC__) || defined(__clang__)
     __attribute__((destructor))
     static void lib_cleanup(void) {
         debug_log("TLS verification bypass cleanup");
+        
+        /* Reset state */
+        LOCK();
+        for (int i = 0; i < FN_MAX; i++) {
+            g_real_funcs[i] = NULL;
+        }
+        g_initialized = 0;
+        g_debug = -1;
+        g_backtrace = -1;
+        UNLOCK();
     }
 #endif
