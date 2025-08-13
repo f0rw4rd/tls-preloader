@@ -27,3 +27,11 @@ libtlsnoverify.so: tls_noverify.c
 
 clean:
 	rm -f libtlsnoverify*.so
+
+# Quick test
+test: libtlsnoverify.so
+	@echo "=== Testing TLS bypass ==="
+	@echo "Testing curl..."
+	@LD_PRELOAD=./libtlsnoverify.so curl -s https://expired.badssl.com >/dev/null 2>&1 && echo "✓ curl: bypass works" || echo "✗ curl: failed"
+	@echo "Testing wget..."
+	@LD_PRELOAD=./libtlsnoverify.so wget -q -O /dev/null https://expired.badssl.com 2>&1 && echo "✓ wget: bypass works" || echo "✗ wget: failed"
