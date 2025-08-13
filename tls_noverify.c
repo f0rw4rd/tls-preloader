@@ -57,6 +57,10 @@
     #endif
 #endif
 
+#ifndef __GIT_COMMIT__
+    #define __GIT_COMMIT__ "unknown"
+#endif
+
 /* =========================== Thread Safety =========================== */
 
 /* Thread safety primitives */

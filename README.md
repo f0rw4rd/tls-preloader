@@ -34,7 +34,7 @@ gcc -shared -fPIC -O3 -o libtlsnoverify.so tls_noverify.c -ldl
 gcc -shared -fPIC -O3 -D_GNU_SOURCE -o libtlsnoverify.so tls_noverify.c -ldl -pthread
 
 # FreeBSD
-cc -shared -fPIC -O3 -D_BSD_SOURCE -o libtlsnoverify.so tls_noverify.c
+cc -shared -fPIC -O3 -o libtlsnoverify.so tls_noverify.c
 
 # Solaris
 cc -shared -fPIC -O3 -D_POSIX_C_SOURCE=200112L -D__EXTENSIONS__ -o libtlsnoverify.so tls_noverify.c -ldl
