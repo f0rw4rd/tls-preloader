@@ -34,7 +34,7 @@ gcc -shared -fPIC -O3 -o libtlsnoverify.so tls_noverify.c -ldl
 gcc -shared -fPIC -O3 -D_GNU_SOURCE -o libtlsnoverify.so tls_noverify.c -ldl -pthread
 
 # FreeBSD
-cc -shared -fPIC -O3 -o libtlsnoverify.so tls_noverify.c
+cc -shared -fPIC -O3 -o libtlsnoverify.so tls_noverify.c -lexecinfo
 
 # Solaris
 cc -shared -fPIC -O3 -D_POSIX_C_SOURCE=200112L -D__EXTENSIONS__ -o libtlsnoverify.so tls_noverify.c -ldl
@@ -108,6 +108,7 @@ The library uses LD_PRELOAD to intercept TLS library functions responsible for c
 ## Environment Variables
 
 - `TLS_NOVERIFY_DEBUG=1`: Enable debug output to stderr
+- `TLS_NOVERIFY_BACKTRACE=1`: Show stack traces for intercepted functions (Linux, FreeBSD, macOS only)
 
 ## Compatibility Notes
 

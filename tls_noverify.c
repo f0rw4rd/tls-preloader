@@ -243,6 +243,19 @@ static void print_backtrace(const char *func_name) {
     if (g_backtrace == -1) {
         const char *env = getenv("TLS_NOVERIFY_BACKTRACE");
         g_backtrace = (env && *env != '\0');
+        
+        /* Check if backtrace is actually available at runtime */
+        if (g_backtrace && PLATFORM_FREEBSD) {
+            void *handle = dlopen(NULL, RTLD_LAZY | RTLD_LOCAL);
+            if (handle) {
+                void *bt_func = dlsym(handle, "backtrace");
+                dlclose(handle);
+                if (!bt_func) {
+                    debug_log("[WARNING] TLS_NOVERIFY_BACKTRACE requested but backtrace() not available");                    
+                    g_backtrace = 0;
+                }
+            }
+        }
     }
     if (!g_backtrace) return;
     
@@ -909,14 +922,6 @@ static void init_library(void) {
     }
 #elif defined(__SUNPRO_C)
     #pragma init(lib_init)
-    static void lib_init(void) {
-        init_library();
-    }
-#elif defined(_MSC_VER)
-    /* MSVC */
-    #pragma section(".CRT$XCU",read)
-    __declspec(allocate(".CRT$XCU")) 
-    static void (*p_lib_init)(void) = lib_init;
     static void lib_init(void) {
         init_library();
     }
