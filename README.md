@@ -45,16 +45,27 @@ gcc -shared -fPIC -Os -nostdlib -o libtlsnoverify.so tls_noverify.c -ldl
 
 ## Usage
 
+**Note:** Use absolute paths for LD_PRELOAD to ensure reliability when applications spawn subprocesses from different directories.
+
 ```bash
 # Basic usage
-LD_PRELOAD=./libtlsnoverify.so curl https://expired.badssl.com/
+LD_PRELOAD=/tmp/libtlsnoverify.so curl https://expired.badssl.com/
 
 # With debug output
-TLS_NOVERIFY_DEBUG=1 LD_PRELOAD=./libtlsnoverify.so curl https://expired.badssl.com/
+TLS_NOVERIFY_DEBUG=1 LD_PRELOAD=/tmp/libtlsnoverify.so curl https://expired.badssl.com/
 
 # Multiple applications
-LD_PRELOAD=./libtlsnoverify.so wget https://self-signed.badssl.com/
-LD_PRELOAD=./libtlsnoverify.so /usr/bin/gnutls-cli --verify-hostname=lol expired.badssl.com 443
+LD_PRELOAD=/tmp/libtlsnoverify.so wget https://self-signed.badssl.com/
+LD_PRELOAD=/tmp/libtlsnoverify.so /usr/bin/gnutls-cli --verify-hostname=lol expired.badssl.com 443
+
+# Web browsers
+LD_PRELOAD=/tmp/libtlsnoverify.so firefox https://badssl.com/dashboard/
+
+# Python with requests library
+LD_PRELOAD=/tmp/libtlsnoverify.so python -c "print(__import__('requests').get('https://expired.badssl.com/').text)"
+
+# Node.js
+LD_PRELOAD=/tmp/libtlsnoverify.so node -e "require('https').get('https://expired.badssl.com',r=>r.on('data',d=>console.log(d+'')))"
 ```
 
 ## How It Works
@@ -125,6 +136,26 @@ The library uses LD_PRELOAD to intercept TLS library functions responsible for c
 - Some statically linked binaries may not be affected
 - Applications using certificate pinning at a higher level may still fail
 - Does not affect certificate validation done in interpreted languages' standard libraries
+- Chrome/Chromium browsers are not supported as they use BoringSSL statically linked into the binary
+
+## Troubleshooting
+
+If the library doesn't seem to work:
+
+1. **Enable debug output** to verify the library is loaded and intercepting functions:
+   ```bash
+   TLS_NOVERIFY_DEBUG=1 LD_PRELOAD=/tmp/libtlsnoverify.so your_command
+   ```
+
+2. **Use strace** to check if the library and target TLS libraries are being loaded:
+   ```bash
+   strace -e openat,open LD_PRELOAD=/tmp/libtlsnoverify.so your_command 2>&1 | grep -E "(libtlsnoverify|libssl|libgnutls|libnss)"
+   ```
+
+3. **Verify library path** is absolute and the file exists:
+   ```bash
+   ls -la /tmp/libtlsnoverify.so
+   ```
 
 ## License
 
