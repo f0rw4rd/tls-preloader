@@ -244,8 +244,13 @@ static void print_backtrace(const char *func_name) {
         const char *env = getenv("TLS_NOVERIFY_BACKTRACE");
         g_backtrace = (env && *env != '\0');
         
+        /* Auto-enable debug if backtrace is requested */
+        if (g_backtrace && g_debug <= 0) {
+            g_debug = 1;
+        }
+        
         /* Check if backtrace is actually available at runtime */
-        if (g_backtrace && PLATFORM_FREEBSD) {
+        if (g_backtrace) {
             void *handle = dlopen(NULL, RTLD_LAZY | RTLD_LOCAL);
             if (handle) {
                 void *bt_func = dlsym(handle, "backtrace");
@@ -274,7 +279,34 @@ static void print_backtrace(const char *func_name) {
         /* Skip first frame (this function), show up to 15 frames */
         size_t max_frames = (size > 16) ? 16 : size;
         for (size_t i = 1; i < max_frames; i++) {
-            debug_logf("  [%zu] %s", i-1, strings[i]);
+            /* Get detailed info using dladdr for better ASLR handling */
+            Dl_info info;
+            memset(&info, 0, sizeof(info));
+            
+            if (dladdr(array[i], &info) && info.dli_fbase) {
+                const char *basename = "???";
+                if (info.dli_fname) {
+                    const char *slash = strrchr(info.dli_fname, '/');
+                    basename = slash ? slash + 1 : info.dli_fname;
+                }
+                
+                if (info.dli_sname && info.dli_saddr) {
+                    /* Show: module+offset symbol+offset */
+                    debug_logf("  [%zu] %s+0x%lx %s+0x%lx", i-1,
+                              basename,
+                              (unsigned long)((char*)array[i] - (char*)info.dli_fbase),
+                              info.dli_sname,
+                              (unsigned long)((char*)array[i] - (char*)info.dli_saddr));
+                } else {
+                    /* No symbol, just show module+offset */
+                    debug_logf("  [%zu] %s+0x%lx", i-1,
+                              basename,
+                              (unsigned long)((char*)array[i] - (char*)info.dli_fbase));
+                }
+            } else {
+                /* Fallback to original string */
+                debug_logf("  [%zu] %s", i-1, strings[i]);
+            }
         }
         if (size > 16) {
             debug_logf("  ... (%zu more frames)", size - 16);
