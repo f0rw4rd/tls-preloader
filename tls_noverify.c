@@ -6,7 +6,9 @@
 /* Platform detection */
 #if defined(__linux__)
     #define PLATFORM_LINUX 1
-    #define _GNU_SOURCE
+    #ifndef _GNU_SOURCE
+        #define _GNU_SOURCE
+    #endif
 #elif defined(__FreeBSD__)
     #define PLATFORM_FREEBSD 1
     #define _BSD_SOURCE
@@ -38,15 +40,25 @@
 #include <time.h>
 #include <unistd.h>
 
-/* Backtrace support headers */
-#if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__)
-    #include <execinfo.h>
+/* Backtrace support detection */
+#ifdef __has_include
+    #if __has_include(<execinfo.h>)
+        #include <execinfo.h>
+        #define HAS_BACKTRACE 1
+    #endif
+#else
+    /* Fallback for older compilers: try platform-specific detection */
+    #if defined(__GLIBC__) || defined(__FreeBSD__) || defined(__APPLE__)
+        #include <execinfo.h>
+        #define HAS_BACKTRACE 1
+    #endif
 #endif
 #if defined(__sun) || defined(sun)
     #include <ucontext.h>
 #endif
 
 /* RTLD_NEXT compatibility */
+/* RTLD compatibility */
 #ifndef RTLD_NEXT
     #if defined(PLATFORM_SOLARIS)
         #define RTLD_NEXT ((void *)-1L)
@@ -57,11 +69,20 @@
     #endif
 #endif
 
+#ifndef RTLD_LOCAL
+    #define RTLD_LOCAL 0
+#endif
+
 #ifndef __GIT_COMMIT__
     #define __GIT_COMMIT__ "unknown"
 #endif
 
 /* =========================== Thread Safety =========================== */
+
+/* Platform-specific thread headers */
+#if defined(PLATFORM_AIX)
+    #include <pthread.h>
+#endif
 
 /* Thread safety primitives */
 #if defined(PLATFORM_LINUX) && !defined(__ANDROID__)
@@ -110,6 +131,7 @@
     /* OpenBSD: atomics + barriers */
     #include <sys/atomic.h>
     #include <unistd.h>
+    #include <sched.h>
     
     static volatile unsigned int g_mutex = 0;
     
@@ -148,6 +170,18 @@
 
 /* =========================== Core Infrastructure =========================== */
 
+/* Configuration constants */
+#define MAX_BACKTRACE_DEPTH 20
+
+/* Function types for dynamic backtrace loading */
+typedef int (*backtrace_func_t)(void **buffer, int size);
+typedef char **(*backtrace_symbols_func_t)(void *const *buffer, int size);
+
+/* Global backtrace function pointers */
+static backtrace_func_t g_backtrace_func = NULL;
+static backtrace_symbols_func_t g_backtrace_symbols_func = NULL;
+static int g_backtrace_init = 0;  /* 0=not initialized, 1=success, -1=failed */
+
 /* SSL/TLS return codes */
 #define SSL_VERIFY_NONE 0x00
 #define SSL_VERIFY_OK 1
@@ -165,20 +199,21 @@ typedef int (*mbedtls_verify_callback_t)(void *p_vrfy, void *crt, int depth, uns
 typedef int (*curl_setopt_func_t)(void *curl, int option, ...);
 typedef int (*curl_getinfo_func_t)(void *curl, int info, ...);
 
-/* Debug logging */
-static int g_debug = -1;
-static int g_backtrace = -1;
+/* Debug logging - use volatile for thread-safe initialization */
+static volatile int g_debug = -1;
+static volatile int g_backtrace = -1;
 
 /* Get thread ID portably */
 static unsigned long get_thread_id(void) {
 #if defined(PLATFORM_LINUX) && defined(__NR_gettid)
-    /* Linux: syscall for actual thread ID */
+    /* Linux: syscall for actual thread ID (x86_64 value) */
     return (unsigned long)syscall(__NR_gettid);
 #elif defined(PLATFORM_FREEBSD) || defined(PLATFORM_NETBSD) || defined(PLATFORM_MACOS)
     /* BSD/macOS: pthread_self */
     return (unsigned long)pthread_self();
 #elif defined(PLATFORM_OPENBSD)
     /* OpenBSD: getthrid */
+    pid_t getthrid(void);
     return (unsigned long)getthrid();
 #elif defined(PLATFORM_SOLARIS)
     /* Solaris: thr_self */
@@ -196,8 +231,12 @@ static unsigned long get_thread_id(void) {
 
 static void debug_log(const char *msg) {
     if (g_debug == -1) {
-        const char *env = getenv("TLS_NOVERIFY_DEBUG");
-        g_debug = (env && *env != '\0');
+        LOCK();
+        if (g_debug == -1) {
+            const char *env = getenv("TLS_NOVERIFY_DEBUG");
+            g_debug = (env && *env != '\0');
+        }
+        UNLOCK();
     }
     if (g_debug) {
         const char prefix[] = "[TLS_NOVERIFY] ";
@@ -210,7 +249,7 @@ static void debug_log(const char *msg) {
                               (int)getpid(), tid);
         
         ret = write(2, prefix, sizeof(prefix) - 1);
-        if (id_len > 0 && id_len < sizeof(id_str)) {
+        if (id_len > 0 && id_len < (int)sizeof(id_str)) {
             ret = write(2, id_str, id_len);
         }
         ret = write(2, msg, strlen(msg));
@@ -222,8 +261,12 @@ static void debug_log(const char *msg) {
 /* Printf-style debug logging */
 static void debug_logf(const char *fmt, ...) {
     if (g_debug == -1) {
-        const char *env = getenv("TLS_NOVERIFY_DEBUG");
-        g_debug = (env && *env != '\0');
+        LOCK();
+        if (g_debug == -1) {
+            const char *env = getenv("TLS_NOVERIFY_DEBUG");
+            g_debug = (env && *env != '\0');
+        }
+        UNLOCK();
     }
     if (g_debug) {
         char buffer[512];
@@ -232,107 +275,122 @@ static void debug_logf(const char *fmt, ...) {
         int len = vsnprintf(buffer, sizeof(buffer), fmt, args);
         va_end(args);
         
-        if (len > 0 && len < sizeof(buffer)) {
+        if (len >= 0 && len < (int)sizeof(buffer)) {
             debug_log(buffer);
         }
     }
 }
 
+/* Helper to display backtrace frames */
+static void display_backtrace_frames(void *array[], size_t size, char **strings) {
+    size_t max_display = (MAX_BACKTRACE_DEPTH - 4);
+    size_t max_frames = (size > max_display) ? max_display : size;
+    
+    for (size_t i = 1; i < max_frames; i++) {
+        Dl_info info;
+        memset(&info, 0, sizeof(info));
+        
+        if (dladdr(array[i], &info) && info.dli_fbase) {
+            const char *basename = "???";
+            if (info.dli_fname) {
+                const char *slash = strrchr(info.dli_fname, '/');
+                basename = slash ? slash + 1 : info.dli_fname;
+            }
+            
+            if (info.dli_sname && info.dli_saddr) {
+                debug_logf("  [%zu] %s+0x%lx %s+0x%lx", i-1,
+                          basename,
+                          (unsigned long)((char*)array[i] - (char*)info.dli_fbase),
+                          info.dli_sname,
+                          (unsigned long)((char*)array[i] - (char*)info.dli_saddr));
+            } else {
+                debug_logf("  [%zu] %s+0x%lx", i-1,
+                          basename,
+                          (unsigned long)((char*)array[i] - (char*)info.dli_fbase));
+            }
+        } else if (strings && strings[i]) {
+            debug_logf("  [%zu] %s", i-1, strings[i]);
+        }
+    }
+    
+    if (size > max_display) {
+        debug_logf("  ... (%zu more frames)", size - max_display);
+    }
+}
+
+/* Get backtrace function, initialize if needed */
+static backtrace_func_t get_backtrace_func(void) {
+    if (g_backtrace_init == 0) {
+        LOCK();
+        if (g_backtrace_init == 0) {
+#ifdef HAS_BACKTRACE
+            g_backtrace_func = backtrace;
+            g_backtrace_symbols_func = backtrace_symbols;
+            g_backtrace_init = 1;
+#else
+            void *execinfo_lib = dlopen("libexecinfo.so.1", RTLD_LAZY | RTLD_LOCAL);
+            if (!execinfo_lib) {
+                execinfo_lib = dlopen("libexecinfo.so", RTLD_LAZY | RTLD_LOCAL);
+            }
+            
+            if (execinfo_lib) {
+                g_backtrace_func = (backtrace_func_t)dlsym(execinfo_lib, "backtrace");
+                g_backtrace_symbols_func = (backtrace_symbols_func_t)dlsym(execinfo_lib, "backtrace_symbols");
+                
+                if (g_backtrace_func && g_backtrace_symbols_func) {
+                    g_backtrace_init = 1;
+                    /* Note: We intentionally leak execinfo_lib handle to keep functions valid */
+                } else {
+                    g_backtrace_func = NULL;
+                    g_backtrace_symbols_func = NULL;
+                    dlclose(execinfo_lib);
+                    g_backtrace_init = -1;
+                }
+            } else {
+                g_backtrace_init = -1;
+            }
+#endif
+            
+            if (g_backtrace_init == -1) {
+                debug_log("[WARNING] Backtrace not supported on this platform/libc");
+            }
+        }
+        UNLOCK();
+    }
+    
+    return (g_backtrace_init == 1) ? g_backtrace_func : NULL;
+}
+
 /* Portable backtrace */
 static void print_backtrace(const char *func_name) {
     if (g_backtrace == -1) {
-        const char *env = getenv("TLS_NOVERIFY_BACKTRACE");
-        g_backtrace = (env && *env != '\0');
-        
-        /* Auto-enable debug if backtrace is requested */
-        if (g_backtrace && g_debug <= 0) {
-            g_debug = 1;
-        }
-        
-        /* Check if backtrace is actually available at runtime */
-        if (g_backtrace) {
-            void *handle = dlopen(NULL, RTLD_LAZY | RTLD_LOCAL);
-            if (handle) {
-                void *bt_func = dlsym(handle, "backtrace");
-                dlclose(handle);
-                if (!bt_func) {
-                    debug_log("[WARNING] TLS_NOVERIFY_BACKTRACE requested but backtrace() not available");                    
-                    g_backtrace = 0;
-                }
+        LOCK();
+        if (g_backtrace == -1) {
+            const char *env = getenv("TLS_NOVERIFY_BACKTRACE");
+            g_backtrace = (env && *env != '\0');
+            
+            if (g_backtrace && g_debug == -1) {
+                g_debug = 1;
             }
         }
+        UNLOCK();
     }
     if (!g_backtrace) return;
     
+    backtrace_func_t bt_func = get_backtrace_func();
+    if (!bt_func) return;
+    
     debug_logf("=== Backtrace for %s ===", func_name);
     
-#if defined(PLATFORM_LINUX) || defined(PLATFORM_FREEBSD) || defined(PLATFORM_MACOS)
-    #include <execinfo.h>
-    void *array[20];  /* Increased from 10 */
-    size_t size;
-    char **strings;
+    void *array[MAX_BACKTRACE_DEPTH];
+    size_t size = bt_func(array, MAX_BACKTRACE_DEPTH);
+    char **strings = g_backtrace_symbols_func(array, size);
     
-    size = backtrace(array, 20);  /* Capture up to 20 frames */
-    strings = backtrace_symbols(array, size);
+    display_backtrace_frames(array, size, strings);
     
     if (strings) {
-        /* Skip first frame (this function), show up to 15 frames */
-        size_t max_frames = (size > 16) ? 16 : size;
-        for (size_t i = 1; i < max_frames; i++) {
-            /* Get detailed info using dladdr for better ASLR handling */
-            Dl_info info;
-            memset(&info, 0, sizeof(info));
-            
-            if (dladdr(array[i], &info) && info.dli_fbase) {
-                const char *basename = "???";
-                if (info.dli_fname) {
-                    const char *slash = strrchr(info.dli_fname, '/');
-                    basename = slash ? slash + 1 : info.dli_fname;
-                }
-                
-                if (info.dli_sname && info.dli_saddr) {
-                    /* Show: module+offset symbol+offset */
-                    debug_logf("  [%zu] %s+0x%lx %s+0x%lx", i-1,
-                              basename,
-                              (unsigned long)((char*)array[i] - (char*)info.dli_fbase),
-                              info.dli_sname,
-                              (unsigned long)((char*)array[i] - (char*)info.dli_saddr));
-                } else {
-                    /* No symbol, just show module+offset */
-                    debug_logf("  [%zu] %s+0x%lx", i-1,
-                              basename,
-                              (unsigned long)((char*)array[i] - (char*)info.dli_fbase));
-                }
-            } else {
-                /* Fallback to original string */
-                debug_logf("  [%zu] %s", i-1, strings[i]);
-            }
-        }
-        if (size > 16) {
-            debug_logf("  ... (%zu more frames)", size - 16);
-        }
         free(strings);
     }
-#elif defined(PLATFORM_SOLARIS)
-    /* Solaris: manual stack walk */
-    void *fp = __builtin_frame_address(0);
-    int depth = 0;
-    while (fp && depth < 15) {  /* Increased from 5 */
-        void *ret = *((void**)fp + 1);
-        Dl_info info;
-        if (dladdr(ret, &info) && info.dli_sname) {
-            debug_logf("  [%d] %s", depth, info.dli_sname);
-        } else if (dladdr(ret, &info) && info.dli_fname) {
-            /* Show filename if symbol name not available */
-            debug_logf("  [%d] %s+%p", depth, info.dli_fname, 
-                      (char*)ret - (char*)info.dli_fbase);
-        }
-        fp = *(void**)fp;
-        depth++;
-    }
-#else
-    debug_log("  Backtrace not supported on this platform");
-#endif
     
     debug_log("===========================");
 }
@@ -382,6 +440,7 @@ static void *portable_dlsym(const char *symbol) {
     
     /* Check for self-reference */
     void *our_addr = dlsym(RTLD_DEFAULT, symbol);
+    if (!our_addr) return NULL;
     
 #if defined(PLATFORM_SOLARIS)
     /* Solaris: RTLD_PROBE */
@@ -973,6 +1032,9 @@ static void init_library(void) {
         g_initialized = 0;
         g_debug = -1;
         g_backtrace = -1;
+        g_backtrace_init = 0;
+        g_backtrace_func = NULL;
+        g_backtrace_symbols_func = NULL;
         UNLOCK();
     }
 #endif
