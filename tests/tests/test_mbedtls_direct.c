@@ -156,14 +156,31 @@ int test_mbedtls_connection() {
     printf("✓ mbedTLS structures initialized\n");
     printf("✓ mbedtls_ssl_conf_authmode was called (should be bypassed)\n");
     
-    /* Check verify result - should return 0 due to bypass */
-    unsigned int verify_result = mbedtls_ssl_get_verify_result(&ssl);
-    printf("  Verify result: %u (0 = success)\n", verify_result);
+    /* For mbedTLS, we need to test the bypass differently since get_verify_result
+     * only works after handshake. We'll just verify our functions are intercepted. */
     
-    if (verify_result == 0) {
-        printf("✓ mbedTLS certificate verification bypassed\n");
+    /* Test that our bypass functions exist and work */
+    void *get_verify = dlsym(RTLD_DEFAULT, "mbedtls_ssl_get_verify_result");
+    void *conf_authmode = dlsym(RTLD_DEFAULT, "mbedtls_ssl_conf_authmode");
+    int test_passed = 0;
+    
+    if (get_verify && conf_authmode) {
+        printf("✓ mbedTLS verification functions are intercepted\n");
+        
+        /* Call get_verify_result through our bypass - should return 0 */
+        unsigned int (*get_verify_func)(void*) = (unsigned int (*)(void*))get_verify;
+        unsigned int result = get_verify_func(&ssl);
+        printf("  Direct call to intercepted mbedtls_ssl_get_verify_result: %u\n", result);
+        
+        if (result == 0) {
+            printf("✓ mbedTLS certificate verification bypass confirmed\n");
+            test_passed = 1;
+        } else {
+            /* This is actually expected before handshake, but our intercept should return 0 */
+            printf("✗ mbedTLS get_verify_result not returning 0 (returned %u)\n", result);
+        }
     } else {
-        printf("✗ mbedTLS certificate verification not bypassed\n");
+        printf("✗ mbedTLS verification functions not found\n");
     }
     
     /* Cleanup */
@@ -175,7 +192,7 @@ int test_mbedtls_connection() {
     if (lib_crypto) dlclose(lib_crypto);
     if (lib_x509) dlclose(lib_x509);
     
-    return verify_result == 0 ? 0 : 1;
+    return test_passed ? 0 : 1;
 }
 
 int main() {
