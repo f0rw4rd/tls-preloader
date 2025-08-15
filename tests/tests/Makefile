@@ -3,8 +3,9 @@ CC = cc
 CFLAGS = -Wall -Wextra -O2 -g
 LDFLAGS = -ldl
 
-# Consolidated test programs (reduced from 36 to 5)
-TESTS = test_all_versions test_http_tools test_tls_basic test_tls_tools test_backtrace
+# Consolidated test programs
+TESTS = test_all_versions test_http_tools test_tls_basic test_tls_tools test_backtrace \
+        test_tls_libraries test_wolfssl_direct test_mbedtls_direct test_nss_direct
 
 all: $(TESTS)
 
@@ -21,6 +22,18 @@ test_tls_tools: test_tls_tools.c test_framework.h
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 test_backtrace: test_backtrace.c test_framework.h
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+test_tls_libraries: test_tls_libraries.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+test_wolfssl_direct: test_wolfssl_direct.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+test_mbedtls_direct: test_mbedtls_direct.c
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+test_nss_direct: test_nss_direct.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 
 # Run all tests

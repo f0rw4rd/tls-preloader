@@ -415,8 +415,8 @@ enum {
     FN_MBEDTLS_SSL_CONF_VERIFY,
     
     /* wolfSSL */
-    FN_WOLFSSL_CTX_SET_VERIFY,
-    FN_WOLFSSL_SET_VERIFY,
+    /* FN_WOLFSSL_CTX_SET_VERIFY - not used, using BYPASS_VOID3 */
+    /* FN_WOLFSSL_SET_VERIFY - not used, using BYPASS_VOID3 */
     
     /* curl */
     FN_CURL_EASY_SETOPT,
@@ -488,6 +488,7 @@ ret_type name(void *arg) { \
     return ret_val; \
 }
 
+
 /* 2 args, return constant */
 #define BYPASS_RETURN2(name, ret_type, arg2_type, ret_val) \
 ret_type name(void *arg1, arg2_type arg2) { \
@@ -529,15 +530,6 @@ ret_type name(void *arg1, arg2_type arg2, arg3_type arg3, arg4_type arg4, \
     return ret_val; \
 }
 
-/* 8 args, special handling */
-#define BYPASS_RETURN8_SPECIAL(name, ret_type, arg2_type, arg3_type, arg4_type, arg5_type, arg6_type, arg7_type, arg8_type) \
-ret_type name(void *arg1, arg2_type arg2, arg3_type arg3, arg4_type arg4, \
-              arg5_type arg5, arg6_type arg6, arg7_type arg7, arg8_type arg8) { \
-    debug_log(#name ": bypass"); \
-    print_backtrace(#name); \
-    if (arg8) *arg8 = arg4; \
-    return 0; \
-}
 
 /* 4 args, void */
 #define BYPASS_VOID4(name, arg2_type, arg3_type, arg4_type) \
@@ -546,12 +538,6 @@ void name(void *arg1, arg2_type arg2, arg3_type arg3, arg4_type arg4) { \
     print_backtrace(#name); \
 }
 
-/* Void return */
-#define BYPASS_VOID(name) \
-void name(void *arg) { \
-    debug_log(#name ": bypass"); \
-    print_backtrace(#name); \
-}
 
 /* 2 args, void */
 #define BYPASS_VOID2(name, arg2_type) \
@@ -577,15 +563,6 @@ void name(void *arg1, arg2_type arg2) { \
     if (real) real(arg1, new_arg2); \
 }
 
-/* Modified args (3) */
-#define BYPASS_LOAD_CALL_VOID3(name, fn_id, arg2_type, arg3_type, new_arg2, new_arg3) \
-void name(void *arg1, arg2_type arg2, arg3_type arg3) { \
-    debug_log(#name ": bypass"); \
-    print_backtrace(#name); \
-    void (*real)(void*, arg2_type, arg3_type) = (void (*)(void*, arg2_type, arg3_type)) \
-        LOAD_FN(fn_id, #name); \
-    if (real) real(arg1, new_arg2, new_arg3); \
-}
 
 /* Return 0, set status ptr (2) */
 #define BYPASS_RETURN_STATUS2(name, arg2_type) \
@@ -614,6 +591,46 @@ ret_type name(void *arg1, arg2_type arg2, arg3_type arg3, arg4_type arg4, arg5_t
     return ret_val; \
 }
 
+/* X509 certificate verify with flags */
+#define BYPASS_X509_VERIFY_FLAGS(name, num_args) \
+int name(void *crt, void *trust_ca, void *ca_crl, const char *cn, \
+         unsigned int *flags, void *f_vrfy, void *p_vrfy) { \
+    debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
+    if (flags) *flags = 0; \
+    return 0; \
+}
+
+/* X509 certificate verify with profile and flags (mbedTLS variant) */
+#define BYPASS_X509_VERIFY_FLAGS_PROFILE(name) \
+int name(void *crt, void *trust_ca, void *ca_crl, void *profile, \
+         const char *cn, unsigned int *flags, void *f_vrfy, void *p_vrfy) { \
+    debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
+    if (flags) *flags = 0; \
+    return 0; \
+}
+
+/* GnuTLS time bypass - returns valid time if cert time is invalid */
+#define BYPASS_GNUTLS_TIME(name, fn_id, comparison, invalid_msg, return_val) \
+time_t name(void *cert) { \
+    debug_log(#name ": intercept"); \
+    print_backtrace(#name); \
+    \
+    time_t (*real)(void*) = (time_t (*)(void*)) \
+        LOAD_FN(fn_id, #name); \
+    \
+    time_t result = (time_t)-1; \
+    if (real && cert) { \
+        result = real(cert); \
+        if (result != (time_t)-1 && comparison) { \
+            debug_log(#name ": " invalid_msg); \
+            return return_val; \
+        } \
+    } \
+    return result; \
+}
+
 /* Replace callback */
 #define BYPASS_LOAD_CALL_CB(name, fn_id, callback) \
 int name(void *arg1, void *arg2, void *arg3) { \
@@ -634,6 +651,36 @@ void name(void *arg1, void *arg2, void *arg3) { \
         (void (*)(void*, cb_type, void*)) \
         LOAD_FN(fn_id, #name); \
     if (real) real(arg1, callback, arg3); \
+}
+
+/* Set verify functions - always disable verification */
+#define BYPASS_SET_VERIFY_DISABLE(name, fn_id) \
+void name(void *arg1, int mode, void *orig_callback) { \
+    debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
+    void (*real)(void*, int, void*) = (void (*)(void*, int, void*)) \
+        LOAD_FN(fn_id, #name); \
+    if (real) { \
+        real(arg1, 0, NULL); /* Always set mode to 0 (no verify) and NULL callback */ \
+    } else { \
+        /* Self-reference case - just return, verification disabled */ \
+        debug_log(#name ": self-reference, skipping"); \
+    } \
+}
+
+/* Generic callback replacement for set_verify functions */
+#define BYPASS_SET_VERIFY_CB(name, fn_id, callback) \
+void name(void *arg1, int mode, void *orig_callback) { \
+    debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
+    void (*real)(void*, int, void*) = (void (*)(void*, int, void*)) \
+        LOAD_FN(fn_id, #name); \
+    if (real) { \
+        real(arg1, mode, callback); /* Use our callback */ \
+    } else { \
+        /* Self-reference case - just return */ \
+        debug_log(#name ": self-reference, skipping"); \
+    } \
 }
 
 /* Replace callback (3 args, 2nd is int) */
@@ -685,9 +732,9 @@ static int mbedtls_verify_cb(void *p_vrfy, void *crt, int depth, unsigned int *f
 
 /* =========================== OpenSSL/BoringSSL/LibreSSL Hooks =========================== */
 
-BYPASS_LOAD_CALL_VOID3(SSL_CTX_set_verify, FN_SSL_CTX_SET_VERIFY, int, void*, 0, NULL)
+BYPASS_SET_VERIFY_CB(SSL_CTX_set_verify, FN_SSL_CTX_SET_VERIFY, openssl_verify_cb)
 
-BYPASS_LOAD_CALL_VOID3(SSL_set_verify, FN_SSL_SET_VERIFY, int, void*, 0, NULL)
+BYPASS_SET_VERIFY_CB(SSL_set_verify, FN_SSL_SET_VERIFY, openssl_verify_cb)
 
 BYPASS_LOAD_CALL_CB_TYPED(SSL_CTX_set_cert_verify_callback, FN_SSL_CTX_SET_CERT_VERIFY_CB, openssl_verify_cb, ssl_verify_callback_t)
 
@@ -753,41 +800,11 @@ BYPASS_RETURN3(gnutls_certificate_set_x509_trust_mem, int, const void*, int, 0)
 
 BYPASS_VOID3(gnutls_certificate_set_verify_limits, unsigned int, unsigned int)
 
-time_t gnutls_x509_crt_get_expiration_time(void *cert) {
-    debug_log("gnutls_x509_crt_get_expiration_time: intercept");
-    print_backtrace("gnutls_x509_crt_get_expiration_time");
-    
-    time_t (*real)(void*) = (time_t (*)(void*))
-        LOAD_FN(FN_GNUTLS_X509_GET_EXPIRY, "gnutls_x509_crt_get_expiration_time");
-    
-    time_t result = (time_t)-1;
-    if (real && cert) {
-        result = real(cert);
-        if (result != (time_t)-1 && result < time(NULL)) {
-            debug_log("gnutls_x509_crt_get_expiration_time: bypass expired");
-            return time(NULL) + 86400;
-        }
-    }
-    return result;
-}
+BYPASS_GNUTLS_TIME(gnutls_x509_crt_get_expiration_time, FN_GNUTLS_X509_GET_EXPIRY, 
+                   result < time(NULL), "bypass expired", time(NULL) + 86400)
 
-time_t gnutls_x509_crt_get_activation_time(void *cert) {
-    debug_log("gnutls_x509_crt_get_activation_time: intercept");
-    print_backtrace("gnutls_x509_crt_get_activation_time");
-    
-    time_t (*real)(void*) = (time_t (*)(void*))
-        LOAD_FN(FN_GNUTLS_X509_GET_ACTIVATION, "gnutls_x509_crt_get_activation_time");
-    
-    time_t result = (time_t)-1;
-    if (real && cert) {
-        result = real(cert);
-        if (result != (time_t)-1 && result > time(NULL)) {
-            debug_log("gnutls_x509_crt_get_activation_time: bypass");
-            return 0;
-        }
-    }
-    return result;
-}
+BYPASS_GNUTLS_TIME(gnutls_x509_crt_get_activation_time, FN_GNUTLS_X509_GET_ACTIVATION,
+                   result > time(NULL), "bypass", 0)
 
 /* =========================== NSS Hooks =========================== */
 
@@ -799,7 +816,14 @@ BYPASS_RETURN5(CERT_VerifyCertNow, int, void*, int, void*, void*, 0)
 
 BYPASS_RETURN7(CERT_VerifyCert, int, void*, int, int, long long, void*, void*, 0)
 
-BYPASS_RETURN8_SPECIAL(CERT_VerifyCertificate, int, void*, int, int, long long, void*, void*, int*)
+/* CERT_VerifyCertificate - special handling for usage parameter */
+int CERT_VerifyCertificate(void *handle, void *cert, int checkSig, int certUsage, 
+                          long long time, void *wincx, void *log, int *usage) {
+    debug_log("CERT_VerifyCertificate: bypass");
+    print_backtrace("CERT_VerifyCertificate");
+    if (usage) *usage = certUsage;  /* Copy certUsage to usage output parameter */
+    return 0;
+}
 
 BYPASS_RETURN2(SSL_SetTrustAnchors, int, void*, 0)
 
@@ -815,27 +839,15 @@ BYPASS_RETURN(mbedtls_ssl_get_verify_result, unsigned int, 0)
 
 BYPASS_VOID3(mbedtls_ssl_conf_ca_chain, void*, void*)
 
-int mbedtls_x509_crt_verify(void *crt, void *trust_ca, void *ca_crl, const char *cn, 
-                           unsigned int *flags, void *f_vrfy, void *p_vrfy) {
-    debug_log("mbedtls_x509_crt_verify: bypass");
-    print_backtrace("mbedtls_x509_crt_verify");
-    if (flags) *flags = 0;
-    return 0;
-}
+BYPASS_X509_VERIFY_FLAGS(mbedtls_x509_crt_verify, 7)
 
-int mbedtls_x509_crt_verify_with_profile(void *crt, void *trust_ca, void *ca_crl, void *profile,
-                                         const char *cn, unsigned int *flags, void *f_vrfy, void *p_vrfy) {
-    debug_log("mbedtls_x509_crt_verify_with_profile: bypass");
-    print_backtrace("mbedtls_x509_crt_verify_with_profile");
-    if (flags) *flags = 0;
-    return 0;
-}
+BYPASS_X509_VERIFY_FLAGS_PROFILE(mbedtls_x509_crt_verify_with_profile)
 
 /* =========================== wolfSSL Hooks =========================== */
 
-BYPASS_LOAD_CALL_VOID3(wolfSSL_CTX_set_verify, FN_WOLFSSL_CTX_SET_VERIFY, int, void*, 0, NULL)
+BYPASS_VOID3(wolfSSL_CTX_set_verify, int, void*)
 
-BYPASS_LOAD_CALL_VOID3(wolfSSL_set_verify, FN_WOLFSSL_SET_VERIFY, int, void*, 0, NULL)
+BYPASS_VOID3(wolfSSL_set_verify, int, void*)
 
 BYPASS_VOID2(wolfSSL_set_verify_depth, int)
 
@@ -843,10 +855,25 @@ BYPASS_RETURN2(wolfSSL_check_domain_name, int, const char*, 1)
 
 BYPASS_RETURN(wolfSSL_get_verify_result, long, 0)
 
+/* wolfSSL_get_error - return success */
+BYPASS_RETURN2(wolfSSL_get_error, int, int, 0)
+
+/* wolfSSL certificate verification functions */
+BYPASS_RETURN(wolfSSL_connect_cert, int, 1)
+BYPASS_RETURN2(wolfSSL_verify_depth, int, int, 1)
+
 /* wolfSSL extensions */
 BYPASS_RETURN3(wolfSSL_CTX_load_verify_locations, int, const char*, const char*, 1)
 
 BYPASS_RETURN3(wolfSSL_CTX_trust_peer_cert, int, const char*, int, 1)
+
+/* wolfSSL_CTX_set_verify_depth */
+BYPASS_VOID2(wolfSSL_CTX_set_verify_depth, int)
+
+/* wolfSSL X509 verification functions */
+BYPASS_RETURN(wolfSSL_X509_verify_cert, int, 1)
+BYPASS_RETURN2(wolfSSL_X509_STORE_CTX_get_error, int, int, 0)
+BYPASS_VOID2(wolfSSL_X509_STORE_CTX_set_error, int)
 
 /* =========================== libcurl Hooks =========================== */
 
