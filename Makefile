@@ -32,7 +32,7 @@ clean:
 debug: libtlsnoverify.so
 	@echo "=== Testing TLS bypass ==="
 	@echo "Testing curl..."
-	@TLS_NOVERIFY_DEBUG=1 TLS_NOVERIY=1 LD_PRELOAD=./libtlsnoverify.so curl -s https://expired.badssl.com 
+	@TLS_NOVERIFY_DEBUG=1 TLS_NOVERIFY_BACKTRACE=1 LD_PRELOAD=./libtlsnoverify.so curl -s https://expired.badssl.com 
 
 test: libtlsnoverify.so
 	@echo "=== Testing TLS bypass ==="

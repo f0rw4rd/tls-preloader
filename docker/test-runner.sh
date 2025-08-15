@@ -16,10 +16,10 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Default values
 PARALLEL=false
-VERBOSE=false
+VERBOSE=true
 FAIL_FAST=true
 TEST_FILTER=""
-DOCKER_ARGS=""
+DOCKER_ARGS="-e TLS_NOVERIFY_DEBUG=1 -e TLS_NOVERIFY_BACKTRACE=1"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -28,9 +28,9 @@ while [[ $# -gt 0 ]]; do
             PARALLEL=true
             shift
             ;;
-        --verbose)
-            VERBOSE=true
-            DOCKER_ARGS="$DOCKER_ARGS -e TLS_NOVERIFY_DEBUG=1"
+        --quiet)
+            VERBOSE=false
+            DOCKER_ARGS=""
             shift
             ;;
         --no-fail-fast)
@@ -45,7 +45,7 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: $0 [options]"
             echo "Options:"
             echo "  --parallel       Run tests in parallel"
-            echo "  --verbose        Enable debug output"
+            echo "  --quiet          Disable verbose output"
             echo "  --no-fail-fast   Continue on test failures"
             echo "  --filter REGEX   Only run tests matching regex"
             echo "  --help           Show this help"
@@ -80,7 +80,9 @@ run_docker_test() {
     local image_name="tls-bypass-test:${test_name}"
     print_status "$YELLOW" "Building Docker image: $image_name"
     
-    if ! docker build -q -f "$dockerfile" -t "$image_name" "$PROJECT_ROOT" > /dev/null 2>&1; then
+    docker build -f "$dockerfile" -t "$image_name" "$PROJECT_ROOT"
+    
+    if [ $? -ne 0 ]; then
         print_status "$RED" "✗ Failed to build Docker image for $test_name"
         return 1
     fi
@@ -89,6 +91,12 @@ run_docker_test() {
     print_status "$YELLOW" "Running tests in container..."
     
     local exit_code=0
+    
+    print_status "$YELLOW" "Container: $container_name"
+    print_status "$YELLOW" "Image: $image_name"
+    print_status "$YELLOW" "Docker args: $DOCKER_ARGS"
+    echo "----------------------------------------"
+    
     if docker run --rm --name "$container_name" $DOCKER_ARGS "$image_name"; then
         print_status "$GREEN" "✓ $test_name tests passed"
     else
@@ -138,6 +146,9 @@ main() {
         exit 1
     fi
     
+    print_status "$YELLOW" "Docker version:"
+    docker --version
+    
     # Check if Docker daemon is running
     if ! docker ps > /dev/null 2>&1; then
         print_status "$RED" "Error: Docker daemon is not running"
@@ -149,6 +160,13 @@ main() {
         "alpine|$SCRIPT_DIR/alpine/Dockerfile|Alpine Linux (musl libc)"
         "ubuntu|$SCRIPT_DIR/ubuntu/Dockerfile|Ubuntu 22.04 (glibc)"
     )
+    
+    print_status "$YELLOW" "Test configuration:"
+    echo "  Parallel: $PARALLEL"
+    echo "  Fail fast: $FAIL_FAST"
+    echo "  Verbose: $VERBOSE"
+    echo "  Filter: ${TEST_FILTER:-none}"
+    echo "  Test environments: ${#TEST_ENVIRONMENTS[@]}"
     
     # Run tests
     local start_time=$(date +%s)
@@ -180,6 +198,12 @@ main() {
     # Calculate execution time
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
+    
+    echo
+    print_status "$YELLOW" "Test execution details:"
+    echo "  Start time: $(date -d @$start_time '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -r $start_time '+%Y-%m-%d %H:%M:%S')"
+    echo "  End time: $(date -d @$end_time '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -r $end_time '+%Y-%m-%d %H:%M:%S')"
+    echo "  Duration: ${duration} seconds"
     
     # Final summary
     echo

@@ -28,8 +28,6 @@
 #elif defined(__APPLE__)
     #define PLATFORM_MACOS 1
     #define _DARWIN_C_SOURCE
-#else
-    #define PLATFORM_UNKNOWN 1
 #endif
 
 #include <dlfcn.h>
@@ -53,12 +51,10 @@
         #define HAS_BACKTRACE 1
     #endif
 #endif
-#if defined(__sun) || defined(sun)
-    #include <ucontext.h>
-#endif
+/* ucontext.h not needed - was for Solaris stack walking */
 
 /* RTLD_NEXT compatibility */
-/* RTLD compatibility */
+/* RTLD_NEXT compatibility */
 #ifndef RTLD_NEXT
     #if defined(PLATFORM_SOLARIS)
         #define RTLD_NEXT ((void *)-1L)
@@ -67,10 +63,6 @@
     #else
         #define RTLD_NEXT ((void *)-1L)
     #endif
-#endif
-
-#ifndef RTLD_LOCAL
-    #define RTLD_LOCAL 0
 #endif
 
 #ifndef __GIT_COMMIT__
@@ -88,7 +80,6 @@
 #if defined(PLATFORM_LINUX) && !defined(__ANDROID__)
     /* Linux: pthread mutex */
     #include <sys/syscall.h>
-    #include <linux/futex.h>
     #include <pthread.h>
     #ifndef __NR_gettid
         #define __NR_gettid 186  /* x86_64 */
@@ -249,10 +240,13 @@ static void debug_log(const char *msg) {
                               (int)getpid(), tid);
         
         ret = write(2, prefix, sizeof(prefix) - 1);
+        (void)ret;
         if (id_len > 0 && id_len < (int)sizeof(id_str)) {
             ret = write(2, id_str, id_len);
+            (void)ret;
         }
         ret = write(2, msg, strlen(msg));
+        (void)ret;
         ret = write(2, "\n", 1);
         (void)ret;
     }
@@ -395,9 +389,6 @@ static void print_backtrace(const char *func_name) {
     debug_log("===========================");
 }
 
-/* Function pointer storage */
-static void *g_real_funcs[64] = {0};
-
 /* Function IDs */
 enum {
     /* OpenSSL/BoringSSL/LibreSSL */
@@ -433,6 +424,9 @@ enum {
     
     FN_MAX
 };
+
+/* Function pointer storage */
+static void *g_real_funcs[FN_MAX] = {0};
 
 /* Dynamic loading wrapper */
 static void *portable_dlsym(const char *symbol) {
@@ -687,13 +681,7 @@ static int mbedtls_verify_cb(void *p_vrfy, void *crt, int depth, unsigned int *f
     return 0;
 }
 
-/* Unused */
-/*
-static int wolfssl_verify_cb(int preverify_ok, void *ctx) {
-    debug_log("wolfSSL verify: bypass");
-    return 1;
-}
-*/
+/* wolfSSL uses the same callback signature as OpenSSL */
 
 /* =========================== OpenSSL/BoringSSL/LibreSSL Hooks =========================== */
 
@@ -981,27 +969,41 @@ static void init_library(void) {
         LOCK();
         if (!g_initialized) {
             g_initialized = 1;
-            debug_logf("TLS verification bypass initialized (commit %s)", __GIT_COMMIT__);
-            
-#if defined(PLATFORM_LINUX)
-            debug_logf("Platform: Linux, TID support: %s", get_thread_id() ? "yes" : "no");
-#elif defined(PLATFORM_FREEBSD)
-            debug_log("Platform: FreeBSD");
-#elif defined(PLATFORM_OPENBSD)
-            debug_log("Platform: OpenBSD");
-#elif defined(PLATFORM_NETBSD)
-            debug_log("Platform: NetBSD");
-#elif defined(PLATFORM_SOLARIS)
-            debug_log("Platform: Solaris");
-#elif defined(PLATFORM_AIX)
-            debug_log("Platform: AIX");
-#elif defined(PLATFORM_MACOS)
-            debug_log("Platform: macOS");
-#else
-            debug_log("Platform: Unknown");
-#endif
+            /* Initialize debug flags while holding lock to avoid race */
+            if (g_debug == -1) {
+                const char *env = getenv("TLS_NOVERIFY_DEBUG");
+                g_debug = (env && *env != '\0');
+            }
+            if (g_backtrace == -1) {
+                const char *env = getenv("TLS_NOVERIFY_BACKTRACE");
+                g_backtrace = (env && *env != '\0');
+                if (g_backtrace && g_debug == -1) {
+                    g_debug = 1;
+                }
+            }
         }
         UNLOCK();
+        
+        /* Log messages after releasing lock to avoid deadlock */
+        debug_logf("TLS verification bypass initialized (commit %s)", __GIT_COMMIT__);
+        
+#if defined(PLATFORM_LINUX)
+        debug_logf("Platform: Linux, TID support: %s", get_thread_id() ? "yes" : "no");
+#elif defined(PLATFORM_FREEBSD)
+        debug_log("Platform: FreeBSD");
+#elif defined(PLATFORM_OPENBSD)
+        debug_log("Platform: OpenBSD");
+#elif defined(PLATFORM_NETBSD)
+        debug_log("Platform: NetBSD");
+#elif defined(PLATFORM_SOLARIS)
+        debug_log("Platform: Solaris");
+#elif defined(PLATFORM_AIX)
+        debug_log("Platform: AIX");
+#elif defined(PLATFORM_MACOS)
+        debug_log("Platform: macOS");
+#else
+        debug_log("Platform: Unknown");
+#endif
     }
 }
 

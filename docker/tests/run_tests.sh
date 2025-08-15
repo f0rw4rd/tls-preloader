@@ -32,11 +32,20 @@ run_test() {
     echo
 }
 
-# Check if library is preloaded
+# Check if library is preloaded, if not try to find it
 if [[ -z "$LD_PRELOAD" ]] || [[ ! "$LD_PRELOAD" =~ "libtlsnoverify.so" ]]; then
-    echo -e "${RED}ERROR: libtlsnoverify.so not preloaded!${NC}"
-    echo "Usage: LD_PRELOAD=/path/to/libtlsnoverify.so $0"
-    exit 1
+    # Try to find the library in common locations
+    if [ -f "/tls-preloader/libtlsnoverify.so" ]; then
+        export LD_PRELOAD="/tls-preloader/libtlsnoverify.so"
+        echo "Auto-detected library at: $LD_PRELOAD"
+    elif [ -f "../libtlsnoverify.so" ]; then
+        export LD_PRELOAD="$(cd .. && pwd)/libtlsnoverify.so"
+        echo "Auto-detected library at: $LD_PRELOAD"
+    else
+        echo -e "${RED}ERROR: libtlsnoverify.so not found!${NC}"
+        echo "Usage: LD_PRELOAD=/path/to/libtlsnoverify.so $0"
+        exit 1
+    fi
 fi
 
 echo "=== TLS Preloader Test Suite ==="

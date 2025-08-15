@@ -68,31 +68,14 @@ COPY docker/tests/ tests/
 # Build library
 RUN make clean && make
 
-# Build tests
-RUN cd tests && \
-    for dir in libcurl openssl gnutls mbedtls wolfssl nss tools; do \
-        if [ -d "$dir" ]; then \
-            echo "Building tests in $dir..."; \
-            (cd "$dir" && make clean && make) || echo "Warning: Tests in $dir failed to build"; \
-        fi; \
-    done
+# No need to build C tests - using bash script
 
-# Set environment for tests
+# Set library path but not LD_PRELOAD (will be set at runtime)
 ENV LD_LIBRARY_PATH=/tls-preloader:/usr/local/lib
-ENV LD_PRELOAD=/tls-preloader/libtlsnoverify.so
 
-# Build main test executable
-RUN cd tests && make test_all
+# Verify glibc has backtrace support
+RUN ldconfig -p | grep -i libc || true
 
-# Create a test runner script
-RUN echo '#!/bin/bash' > /tls-preloader/run_tests.sh && \
-    echo 'export LD_PRELOAD=/tls-preloader/libtlsnoverify.so' >> /tls-preloader/run_tests.sh && \
-    echo 'export TLS_NOVERIFY_DEBUG=1' >> /tls-preloader/run_tests.sh && \
-    echo 'echo "Running tests with LD_PRELOAD=$LD_PRELOAD"' >> /tls-preloader/run_tests.sh && \
-    echo 'echo "Debug mode enabled: TLS_NOVERIFY_DEBUG=$TLS_NOVERIFY_DEBUG"' >> /tls-preloader/run_tests.sh && \
-    echo 'cd /tls-preloader/tests' >> /tls-preloader/run_tests.sh && \
-    echo './test_all' >> /tls-preloader/run_tests.sh && \
-    chmod +x /tls-preloader/run_tests.sh
-
-# Run tests
-CMD ["/tls-preloader/run_tests.sh"]
+# Run tests  
+WORKDIR /tls-preloader/tests
+CMD ["./run_tests.sh"]
