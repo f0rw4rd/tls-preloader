@@ -37,7 +37,7 @@ RUN wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh && \
     rm dotnet-install.sh
 
 # Copy and run wolfSSL build script
-COPY docker/build_scripts/build_wolfssl_simple.sh /tmp/
+COPY tests/build_scripts/build_wolfssl_simple.sh /tmp/
 RUN /tmp/build_wolfssl_simple.sh && rm /tmp/build_wolfssl_simple.sh
 
 # Set working directory
@@ -47,7 +47,7 @@ WORKDIR /tls-preloader
 COPY tls_noverify.c Makefile ./
 
 # Copy test suite
-COPY docker/tests/ tests/
+COPY tests/ tests/
 
 # Build library
 RUN make clean && make
@@ -56,5 +56,5 @@ RUN make clean && make
 ENV LD_LIBRARY_PATH=/tls-preloader:/usr/local/lib
 
 # Run tests
-WORKDIR /tls-preloader/tests
+WORKDIR /tls-preloader/tests/tests
 CMD ["./run_tests.sh"]

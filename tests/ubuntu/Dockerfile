@@ -53,7 +53,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy and run wolfSSL build script
-COPY docker/build_scripts/build_wolfssl_simple.sh /tmp/
+COPY tests/build_scripts/build_wolfssl_simple.sh /tmp/
 RUN /tmp/build_wolfssl_simple.sh && rm /tmp/build_wolfssl_simple.sh
 
 # Set working directory
@@ -63,7 +63,7 @@ WORKDIR /tls-preloader
 COPY tls_noverify.c Makefile ./
 
 # Copy test suite
-COPY docker/tests/ tests/
+COPY tests/ tests/
 
 # Build library
 RUN make clean && make
@@ -77,5 +77,5 @@ ENV LD_LIBRARY_PATH=/tls-preloader:/usr/local/lib
 RUN ldconfig -p | grep -i libc || true
 
 # Run tests  
-WORKDIR /tls-preloader/tests
+WORKDIR /tls-preloader/tests/tests
 CMD ["./run_tests.sh"]

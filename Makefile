@@ -34,9 +34,12 @@ debug: libtlsnoverify.so
 	@echo "Testing curl..."
 	@TLS_NOVERIFY_DEBUG=1 TLS_NOVERIFY_BACKTRACE=1 LD_PRELOAD=./libtlsnoverify.so curl -s https://expired.badssl.com 
 
-test: libtlsnoverify.so
+quicktest: libtlsnoverify.so
 	@echo "=== Testing TLS bypass ==="
 	@echo "Testing curl..."
 	@LD_PRELOAD=./libtlsnoverify.so curl -s https://expired.badssl.com >/dev/null 2>&1 && echo "✓ curl: bypass works" || echo "✗ curl: failed"
 	@echo "Testing wget..."
 	@LD_PRELOAD=./libtlsnoverify.so wget -q -O /dev/null https://expired.badssl.com 2>&1 && echo "✓ wget: bypass works" || echo "✗ wget: failed"
+
+test:
+	@$(MAKE) -C tests test
