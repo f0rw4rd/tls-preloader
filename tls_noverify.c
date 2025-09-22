@@ -412,8 +412,7 @@ enum {
     
     /* mbedTLS */
     FN_MBEDTLS_SSL_CONF_AUTHMODE,
-    FN_MBEDTLS_SSL_CONF_VERIFY,
-    FN_MBEDTLS_SSL_CONF_CA_CHAIN,
+    FN_MBEDTLS_SSL_CONF_VERIFY,    
     
     /* wolfSSL */
     /* FN_WOLFSSL_CTX_SET_VERIFY - not used, using BYPASS_VOID3 */
@@ -846,8 +845,6 @@ BYPASS_LOAD_CALL_CB_TYPED(mbedtls_ssl_conf_verify, FN_MBEDTLS_SSL_CONF_VERIFY, m
 BYPASS_RETURN2(mbedtls_ssl_set_hostname, int, const char*, 0)
 
 BYPASS_RETURN(mbedtls_ssl_get_verify_result, unsigned int, 0)
-
-BYPASS_LOAD_CALL_VOID3(mbedtls_ssl_conf_ca_chain, FN_MBEDTLS_SSL_CONF_CA_CHAIN, void*, void*)
 
 BYPASS_X509_VERIFY_FLAGS(mbedtls_x509_crt_verify, 7)
 
