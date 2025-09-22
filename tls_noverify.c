@@ -413,6 +413,7 @@ enum {
     /* mbedTLS */
     FN_MBEDTLS_SSL_CONF_AUTHMODE,
     FN_MBEDTLS_SSL_CONF_VERIFY,
+    FN_MBEDTLS_SSL_CONF_CA_CHAIN,
     
     /* wolfSSL */
     /* FN_WOLFSSL_CTX_SET_VERIFY - not used, using BYPASS_VOID3 */
@@ -561,6 +562,15 @@ void name(void *arg1, arg2_type arg2) { \
     void (*real)(void*, arg2_type) = (void (*)(void*, arg2_type)) \
         LOAD_FN(fn_id, #name); \
     if (real) real(arg1, new_arg2); \
+}
+
+#define BYPASS_LOAD_CALL_VOID3(name, fn_id, arg2_type, arg3_type) \
+void name(void *arg1, arg2_type arg2, arg3_type arg3) { \
+    debug_log(#name ": bypass"); \
+    print_backtrace(#name); \
+    void (*real)(void*, arg2_type, arg3_type) = (void (*)(void*, arg2_type, arg3_type)) \
+        LOAD_FN(fn_id, #name); \
+    if (real) real(arg1, arg2, arg3); \
 }
 
 
@@ -837,7 +847,7 @@ BYPASS_RETURN2(mbedtls_ssl_set_hostname, int, const char*, 0)
 
 BYPASS_RETURN(mbedtls_ssl_get_verify_result, unsigned int, 0)
 
-BYPASS_VOID3(mbedtls_ssl_conf_ca_chain, void*, void*)
+BYPASS_LOAD_CALL_VOID3(mbedtls_ssl_conf_ca_chain, FN_MBEDTLS_SSL_CONF_CA_CHAIN, void*, void*)
 
 BYPASS_X509_VERIFY_FLAGS(mbedtls_x509_crt_verify, 7)
 
