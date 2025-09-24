@@ -157,6 +157,12 @@ If the library doesn't seem to work:
    ls -la /tmp/libtlsnoverify.so
    ```
 
+4. If you see portable_dlsym: self-reference: the target lib is missing and it seems to be lazy loading
+   ```bash
+   #LD_PRELOAD="/path/to/libtlsnoverify.so:/usr/lib/targetlib" wget https://example.com
+   LD_PRELOAD="/path/to/libtlsnoverify.so:/usr/lib/libmbedtls.so.21" wget https://example.com
+   ```
+   
 ## License
 
 Use at your own risk. This tool is provided for testing and debugging purposes only.
