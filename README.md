@@ -163,6 +163,12 @@ If the library doesn't seem to work:
    LD_PRELOAD="/path/to/libtlsnoverify.so:/usr/lib/libmbedtls.so.21" wget https://example.com
    ```
    
+## Support
+
+If you find this project useful, consider supporting development:
+
+[![Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/f0rw4rd)
+
 ## License
 
 Use at your own risk. This tool is provided for testing and debugging purposes only.
